@@ -401,11 +401,10 @@ th.num{text-align:right}
   font-variant-numeric:tabular-nums;padding-top:12px;
 }
 .bar{
-  margin-top:6px;height:5px;border-radius:3px;background:var(--band);
-  overflow:hidden;max-width:340px;
+  margin-top:7px;height:4px;border-radius:3px;background:var(--rule);
+  overflow:hidden;display:block;
 }
-.bar i{display:block;height:100%;background:var(--cyan);border-radius:3px}
-.league tr:first-child .bar i,.league tbody tr:nth-child(2) .bar i{background:var(--blue)}
+.bar i{display:block;height:100%;background:var(--blue);border-radius:3px}
 
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px 14px}
 .kpi .l{font:600 11px var(--sans);color:var(--tx3);text-transform:uppercase;letter-spacing:.06em}
@@ -569,20 +568,20 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 /* The dashboard tile: title and a kebab, a pair of figures reading as one
    sentence, room for a chart, then the actions. Same anatomy as the cards on
    Xero's own home page. */
-.xgrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+/* Two to a row on a laptop, three on a wide monitor. A tile holds two figures
+   side by side with a rule between them, and below about 460px of card that
+   pairing starts to crush - the numbers are the point of the page, so the grid
+   yields before they do. */
+.xgrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr))}
 .xcard{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
   display:flex;flex-direction:column;overflow:hidden;
 }
-.xcard>.xh{
-  display:flex;align-items:center;gap:10px;padding:15px 18px 0;
-}
+/* Same band a .card gets, so a dashboard tile and a page panel are visibly the
+   same kind of object. */
+.xcard>.xh{padding:15px 18px 12px;border-bottom:1px solid var(--rule)}
 .xcard>.xh h3{font-size:15px;font-weight:600;letter-spacing:-.005em}
-.xcard>.xh .kebab{
-  margin-left:auto;color:var(--tx3);font-size:17px;line-height:1;
-  letter-spacing:1px;user-select:none;
-}
-.xcard>.xb{padding:14px 18px 18px;flex:1}
+.xcard>.xb{padding:16px 18px 18px;flex:1}
 .xcard>.xf{
   border-top:1px solid var(--rule);padding:12px 18px;
   display:flex;gap:9px;flex-wrap:wrap;
@@ -606,11 +605,13 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 .empty p{font-size:12.5px;line-height:1.65;max-width:46ch;margin:0 auto}
 
 /* the ranked list inside a tile: name, bar, figure - no table furniture */
-.ranks{display:flex;flex-direction:column;gap:11px}
-.rankrow{display:grid;grid-template-columns:20px 1fr auto;gap:11px;align-items:baseline}
-.rankrow .n{font:600 11.5px var(--num);color:var(--tx3);font-variant-numeric:tabular-nums}
-.rankrow .nm{font-size:13px;color:var(--tx);line-height:1.3}
-.rankrow .nm small{display:block;color:var(--tx3);font-size:11px;margin-top:1px}
-.rankrow .amt{font:600 13px var(--sans);font-variant-numeric:tabular-nums;text-align:right}
-.rankrow .amt small{display:block;color:var(--tx3);font-weight:400;font-size:11px}
-.rankrow .bar{margin-top:5px;max-width:none}
+/* Rank, name, amount - and one bar under the name doing the comparing. Anything
+   more per row and a league table stops reading as a ranking. */
+.ranks{display:flex;flex-direction:column;gap:14px}
+.rankrow{display:grid;grid-template-columns:16px 1fr auto;gap:12px;align-items:baseline}
+.rankrow .n{font:500 12px var(--num);color:var(--tx3);font-variant-numeric:tabular-nums}
+.rankrow .nm{font-size:13.5px;color:var(--tx);line-height:1.3;min-width:0}
+.rankrow .amt{
+  font:600 13.5px var(--sans);color:var(--tx);
+  font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
+}

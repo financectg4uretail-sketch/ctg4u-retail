@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=ac1b7f3afc">
+<link rel="stylesheet" href="assets/app.css?v=af91fc8eb1">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -425,23 +425,30 @@ function rankList(list, top, unit) {
   var total = list.reduce(function (t, r) { return t + Number(r.gross || 0); }, 0);
   return '<div class="ranks">' + list.slice(0, top || 8).map(function (r, i) {
     var g = Number(r.gross || 0);
-    var second = r.projects != null
+    /* Three things per row: rank, who, how much - and one bar carrying the
+     * comparison. The code, the brand count and the share of total were a
+     * fourth and fifth layer that made a league table read as a form; they move
+     * onto the row's tooltip, so nothing is lost and nothing is in the way. */
+    var spread = r.projects != null
       ? r.projects + ' brand' + (r.projects === 1 ? '' : 's')
       : r.pharmacies + ' pharmac' + (r.pharmacies === 1 ? 'y' : 'ies');
-    return '<div class="rankrow">' +
+    var note = r.code + ' · ' + spread + ' · ' +
+               (total ? (g / total * 100).toFixed(1) : '0.0') + '% of ' + (unit || 'total');
+    return '<div class="rankrow" title="' + esc(note) + '">' +
       '<span class="n">' + (i + 1) + '</span>' +
       '<span class="nm">' + esc(r.name) +
-        '<small>' + esc(r.code) + ' &middot; ' + second + '</small>' +
         '<span class="bar"><i style="width:' + (g / max * 100).toFixed(1) + '%"></i></span></span>' +
-      '<span class="amt">' + M(g) +
-        '<small>' + (total ? (g / total * 100).toFixed(1) : '0.0') + '% of ' + (unit || 'total') + '</small></span>' +
+      '<span class="amt">' + M(g) + '</span>' +
       '</div>';
   }).join('') + '</div>';
 }
 
+/* One panel shape for the whole application: a titled band with a rule under
+ * it, the content, then the actions below a second rule. The dashboard used to
+ * have its own variant with no rule and a kebab that opened nothing - two
+ * panel idioms in one product is what makes it feel unfinished. */
 function xcard(title, body, foot) {
-  return '<div class="xcard"><div class="xh"><h3>' + title + '</h3>' +
-    '<span class="kebab" aria-hidden="true">&#8942;</span></div>' +
+  return '<div class="xcard"><div class="xh"><h3>' + title + '</h3></div>' +
     '<div class="xb">' + body + '</div>' +
     (foot ? '<div class="xf">' + foot + '</div>' : '') + '</div>';
 }
