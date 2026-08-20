@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=aa92432bfa">
+<link rel="stylesheet" href="assets/app.css?v=ac1b7f3afc">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -794,7 +794,7 @@ function renderSheets() {
     'a wrong mapping here is the one thing that silently produces confident, wrong invoices.'));
 
   ST.sheets.forEach(function (S, si) {
-    var box = el('div', { class: 'card', style: 'background:var(--card2);margin-bottom:12px' });
+    var box = el('div', { class: 'card', style: 'background:var(--band);margin-bottom:12px' });
     var hdrRow = S.rows[0] || [];
 
     var head = el('div', { class: 'row', style: 'margin-bottom:10px' });

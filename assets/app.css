@@ -46,11 +46,6 @@
   --warn:#e8a33d;    --warn-tx:#8a5a0c; --warn-bg:#e8a33d1f;
   --bad:#d64545;     --bad-tx:#a82f2f;  --bad-bg:#d6454514;
 
-  /* aliases so older rules and inline styles keep resolving */
-  --bg:var(--canvas); --bg2:var(--surface-2);
-  --card:var(--surface); --card2:var(--band);
-  --coral:var(--blue); --coral2:var(--blue-dk);
-
   --sans:"Public Sans",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
   --num:"Public Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -108,7 +103,7 @@ a:hover{color:var(--blue-dk)}
   display:flex;align-items:center;gap:16px;
 }
 .tb .mark{
-  width:30px;height:30px;border-radius:6px;flex:none;display:grid;place-items:center;
+  width:30px;height:30px;border-radius:var(--r-lg);flex:none;display:grid;place-items:center;
   background:#fff;color:var(--blue-dk);font:700 10.5px var(--sans);letter-spacing:.02em;
 }
 .tb .org{
@@ -134,7 +129,7 @@ a:hover{color:var(--blue-dk)}
 .identmenu{
   position:absolute;right:0;top:42px;z-index:60;min-width:236px;
   background:var(--surface);color:var(--tx);
-  border:1px solid var(--line);border-radius:8px;
+  border:1px solid var(--line);border-radius:var(--r-lg);
   box-shadow:0 10px 28px -8px #1b273336, 0 2px 6px -2px #1b273320;
   padding:14px;
 }
@@ -282,7 +277,7 @@ select{
   background-repeat:no-repeat;background-position:right 11px center;
 }
 /* inside a dense table the controls shrink to fit the row */
-td select,td input[type=text]{height:30px;font-size:13px}
+td select,td input[type=text]{height:var(--h-sm);font-size:13px}
 
 input[type=checkbox]{
   width:16px;height:16px;accent-color:var(--blue);cursor:pointer;margin:0;vertical-align:-2px;
@@ -294,12 +289,12 @@ input[type=checkbox]{
    Tightened, given a mark to aim at, and lifted on hover so it reads as a
    target rather than a placeholder. */
 .drop{
-  border:1.5px dashed var(--line-strong);border-radius:10px;
+  border:1.5px dashed var(--line-strong);border-radius:var(--r-lg);
   padding:30px 22px;text-align:center;color:var(--tx2);cursor:pointer;background:var(--surface-2);
   transition:border-color .16s,background .16s,color .16s,box-shadow .16s;
 }
 .drop::before{
-  content:'';display:block;width:38px;height:38px;margin:0 auto 12px;border-radius:9px;
+  content:'';display:block;width:38px;height:38px;margin:0 auto 12px;border-radius:var(--r);
   background:var(--blue-tint);border:1px solid #0077c833;
   /* an upward arrow into a tray, drawn rather than fetched */
   background-image:
@@ -354,7 +349,7 @@ th.num{text-align:right}
 .chip.bad b{color:var(--bad-tx)}
 
 .badge{
-  display:inline-block;padding:2px 8px;border-radius:3px;
+  display:inline-block;padding:2px 8px;border-radius:var(--r);
   font:600 11px/1.45 var(--sans);background:#eef2f5;color:var(--tx2);
 }
 .badge.bad{background:var(--bad-bg);color:var(--bad-tx)}
@@ -363,7 +358,7 @@ th.num{text-align:right}
 .badge.info{background:var(--blue-tint);color:var(--blue-dk)}
 
 .st{
-  display:inline-block;padding:3px 9px;border-radius:3px;
+  display:inline-block;padding:3px 9px;border-radius:var(--r);
   font:700 10px/1.4 var(--sans);text-transform:uppercase;letter-spacing:.06em;
 }
 .st.draft{background:var(--warn-bg);color:var(--warn-tx)}
@@ -371,7 +366,7 @@ th.num{text-align:right}
 .st.void{background:var(--bad-bg);color:var(--bad-tx)}
 
 .ro{
-  display:inline-block;padding:2px 7px;border-radius:3px;
+  display:inline-block;padding:2px 7px;border-radius:var(--r);
   font:700 9px/1.5 var(--sans);letter-spacing:.08em;text-transform:uppercase;
 }
 .ro.admin{background:var(--blue-tint);color:var(--blue-dk)}
@@ -473,7 +468,7 @@ details>summary:hover{color:var(--blue-dk)}
    which is what makes it read as progress rather than as tabs. */
 .steps{
   display:flex;gap:0;margin-bottom:22px;flex-wrap:wrap;
-  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
   padding:16px 8px 15px;
 }
 .steps div{
@@ -576,7 +571,7 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
    Xero's own home page. */
 .xgrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 .xcard{
-  background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
   display:flex;flex-direction:column;overflow:hidden;
 }
 .xcard>.xh{
