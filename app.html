@@ -484,16 +484,85 @@ function figs(aVal, aCap, bVal, bCap, plain) {
  * The arrangement is deterministic - the same pharmacy lands on the same spot
  * every render - because a cluster that reshuffles on every refresh reads as
  * movement, and nothing here moves. */
-function mapSpots(list, cx, cy, spread) {
-  /* A phyllotaxis spiral: evenly packed, no overlaps, and it grows outward
-     from the centroid rather than in rows, so a state with sixteen pharmacies
-     still looks like one place. */
-  var GOLDEN = Math.PI * (3 - Math.sqrt(5));
-  return list.map(function (p, i) {
-    var r = spread * Math.sqrt((i + 0.5) / list.length);
-    var a = i * GOLDEN;
-    return { p: p, x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) * 0.72 };
+/* Where a pharmacy is, and how much it sold.
+ *
+ * Positions are real now: the Xero contact export gave a town for all sixty-two,
+ * and tools/geocode-towns.js turned those into coordinates, checking each one
+ * against the state polygon it claims to be in. Town centres, not shopfronts -
+ * at this scale a pixel is about 1.2km and a dot spans 5 to 22km, so the two are
+ * the same dot, and the caption says so rather than implying otherwise.
+ *
+ * A pharmacy with no coordinate still appears, laid out around its state's
+ * centroid, because dropping it would quietly understate the month. */
+var MY_BBOX = { minLng: 99.643, minLat: 0.855, maxLng: 119.276, maxLat: 7.363 };
+
+function mapProject(lat, lng, geo) {
+  return [ ((lng - MY_BBOX.minLng) / (MY_BBOX.maxLng - MY_BBOX.minLng)) * geo.width,
+           ((MY_BBOX.maxLat - lat) / (MY_BBOX.maxLat - MY_BBOX.minLat)) * geo.height ];
+}
+
+/* Several pharmacies share a town - Sibu has six - so identical points are
+ * fanned into a small ring. Deterministic by position in the list, because a
+ * cluster that reshuffles on every render reads as movement. */
+/* Is this point on Malaysian land? The outlines are already in the SVG's own
+ * coordinates, so the test is a plain ray cast against them. Parsed once. */
+var _landRings = null;
+function landRings() {
+  if (_landRings) return _landRings;
+  _landRings = [];
+  MYMAP.states.forEach(function (s) {
+    s.d.split('Z').forEach(function (seg) {
+      if (!seg) return;
+      var ring = seg.replace(/^M/, '').split('L').map(function (pair) {
+        var xy = pair.trim().split(/\s+/);
+        return [Number(xy[0]), Number(xy[1])];
+      });
+      if (ring.length > 3) _landRings.push(ring);
+    });
   });
+  return _landRings;
+}
+function onLand(x, y) {
+  return landRings().some(function (ring) {
+    var inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  });
+}
+
+/* Several pharmacies share a town - Sibu has six - so identical points are
+ * fanned into a small ring, deterministically, because a cluster that
+ * reshuffles on every render reads as movement.
+ *
+ * Coastal towns need the second half of this. Miri, Johor Bahru and Gelang
+ * Patah all sit on the shoreline, and a fan of ten kilometres put three
+ * pharmacies in the South China Sea - which reads as a bug in the data rather
+ * than as spacing. So a displaced point that lands in water is pulled back
+ * toward its town until it is on land again. */
+function fanOut(pts) {
+  var by = {};
+  pts.forEach(function (p) {
+    var k = p.x.toFixed(1) + ',' + p.y.toFixed(1);
+    (by[k] = by[k] || []).push(p);
+  });
+  Object.keys(by).forEach(function (k) {
+    var g = by[k];
+    if (g.length < 2) return;
+    var R = 4 + g.length * 1.1;
+    g.forEach(function (p, i) {
+      var a = (i / g.length) * Math.PI * 2 - Math.PI / 2;
+      var dx = R * Math.cos(a), dy = R * Math.sin(a) * 0.8;
+      var f = 1;
+      while (f > 0.12 && !onLand(p.x + dx * f, p.y + dy * f)) f *= 0.6;
+      if (f <= 0.12) f = 0;           // nowhere to go: leave it on the town
+      p.x += dx * f;
+      p.y += dy * f;
+    });
+  });
+  return pts;
 }
 
 function renderMap(byPharmacy, byState) {
@@ -509,62 +578,65 @@ function renderMap(byPharmacy, byState) {
   var maxPh = Math.max.apply(null, [1].concat((byPharmacy || []).map(function (p) { return Number(p.gross || 0); })));
   var leader = (byPharmacy || [])[0];
 
-  /* group the pharmacies by state so each cluster can be placed on its own */
-  var grouped = {};
-  (byPharmacy || []).forEach(function (p) {
-    var k = String(p.state || '').toLowerCase();
-    (grouped[k] = grouped[k] || []).push(p);
-  });
-
   var shapes = GEO.states.map(function (st) {
     var v = stateTotal[st.key] || 0;
-    /* Square root, not linear: one state with four times the sales should not
-       be four times as dark, or everything below the leader turns into paper. */
-    var t = v ? 0.12 + 0.68 * Math.sqrt(v / maxState) : 0;
+    /* Square root, not linear: one state with four times the sales should not be
+       four times as dark, or everything below the leader turns into paper. */
+    var t = v ? 0.10 + 0.60 * Math.sqrt(v / maxState) : 0;
     return '<path d="' + st.d + '" fill="' + (v ? 'rgba(0,119,200,' + t.toFixed(3) + ')' : '#eef2f6') +
       '" stroke="#ffffff" stroke-width="1.2" stroke-linejoin="round">' +
       '<title>' + esc(st.name) + (v ? ' — ' + M2(v) + ' from ' + stateCount[st.key] + ' pharmacy(s)'
                                     : ' — no sales this period') + '</title></path>';
   }).join('');
 
-  var dots = '';
-  GEO.states.forEach(function (st) {
-    var list = grouped[st.key];
-    if (!list || !list.length) return;
-    /* how far the cluster may spread: enough to separate dots, small enough to
-       stay recognisably inside the state it belongs to */
-    var spread = Math.min(26, 9 + list.length * 1.6);
-    mapSpots(list, st.cx, st.cy, spread).forEach(function (s) {
-      var g = Number(s.p.gross || 0);
-      var rad = 2.4 + 7.6 * Math.sqrt(g / maxPh);
-      var top = leader && s.p.code === leader.code;
-      dots += '<circle class="spot' + (top ? ' top' : '') + '" cx="' + s.x.toFixed(1) +
-        '" cy="' + s.y.toFixed(1) + '" r="' + rad.toFixed(1) + '">' +
-        '<title>' + esc(s.p.name) + ' (' + esc(s.p.code) + ')\n' + M2(g) +
-        '\n' + esc(st.name) + '</title></circle>';
-    });
+  /* place every pharmacy: by coordinate where we have one, otherwise around the
+     centroid of its state */
+  var placed = [], noCoord = 0;
+  var centroid = {};
+  GEO.states.forEach(function (s) { centroid[s.key] = s; });
+  (byPharmacy || []).forEach(function (p) {
+    var xy;
+    if (p.lat != null && p.lng != null) {
+      xy = mapProject(Number(p.lat), Number(p.lng), GEO);
+    } else {
+      var st = centroid[String(p.state || '').toLowerCase()];
+      if (!st) return;
+      noCoord++;
+      xy = [st.cx, st.cy];
+    }
+    placed.push({ p: p, x: xy[0], y: xy[1] });
   });
+  fanOut(placed);
+
+  var dots = placed.map(function (s) {
+    var g = Number(s.p.gross || 0);
+    var rad = 2.2 + 7.4 * Math.sqrt(g / maxPh);
+    var top = leader && s.p.code === leader.code;
+    return '<circle class="spot' + (top ? ' top' : '') + '" cx="' + s.x.toFixed(1) +
+      '" cy="' + s.y.toFixed(1) + '" r="' + rad.toFixed(1) + '">' +
+      '<title>' + esc(s.p.name) + ' (' + esc(s.p.code) + ')\n' + M(g) +
+      '\n' + esc(s.p.town || s.p.state || '') + '</title></circle>';
+  }).join('');
 
   var top5 = (byState || []).slice(0, 5).map(function (s) {
     return '<div class="mlrow"><span class="sw" style="opacity:' +
-      (0.12 + 0.68 * Math.sqrt(Number(s.gross) / maxState)).toFixed(3) + '"></span>' +
+      (0.10 + 0.60 * Math.sqrt(Number(s.gross) / maxState)).toFixed(3) + '"></span>' +
       '<span class="nm">' + esc(s.state) + '</span>' +
       '<span class="amt">' + M(s.gross) + '</span></div>';
   }).join('');
 
   return xcard('Where the sales come from',
     '<div class="mapwrap"><svg class="mymap" viewBox="0 0 ' + GEO.width + ' ' + GEO.height + '" ' +
-      'role="img" aria-label="Map of Malaysia showing pharmacy sales by state">' +
+      'role="img" aria-label="Map of Malaysia showing each pharmacy sized by its sales">' +
       shapes + dots + '</svg></div>' +
     '<div class="maplegend">' +
       '<div class="mlist">' + top5 + '</div>' +
       '<div class="mnote">' +
         (leader ? '<b>' + esc(leader.name) + '</b> leads on ' + M(leader.gross) +
-                  ', in ' + esc(leader.state || 'an unknown state') + '. ' : '') +
-        'Each circle is one pharmacy, sized by its sales. ' +
-        '<b>Circles are placed within their state, not at their street address</b> &mdash; ' +
-        'the master data holds a state and no address, so the position shows the region, ' +
-        'not the shop.' +
+                  ', in ' + esc(leader.town || leader.state || 'an unknown town') + '. ' : '') +
+        'Each circle is one pharmacy, sized by its sales, placed at its town. ' +
+        'Pharmacies sharing a town are fanned apart so none is hidden behind another.' +
+        (noCoord ? ' <b>' + noCoord + ' without a coordinate</b> sit at the centre of their state.' : '') +
       '</div>' +
     '</div>', '');
 }
