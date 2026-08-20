@@ -660,3 +660,75 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
   .maplegend{gap:16px}
   .mlist{min-width:0;width:100%}
 }
+
+/* ------------------------------------------------------- movers and dormancy */
+
+/* Bars run out from a shared centre so a fall reads as a fall, not as a number
+   with a minus in front of it. */
+.mvhd{
+  font:600 10.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ok-tx);margin:4px 0 10px;
+}
+.mvhd.dn{color:var(--bad-tx);margin-top:20px}
+.mv{display:grid;grid-template-columns:1fr 96px 104px;gap:12px;align-items:center;margin-bottom:9px}
+.mv .who{font-size:13px;color:var(--tx);line-height:1.25;min-width:0}
+.mv .who small{display:block;color:var(--tx3);font-size:11px;margin-top:1px}
+.mv .tr{height:6px;border-radius:3px;background:var(--rule);overflow:hidden;display:flex}
+.mv.up .tr{justify-content:flex-start}
+.mv.dn .tr{justify-content:flex-end}
+.mv .tr i{display:block;height:100%;border-radius:3px}
+.mv.up .tr i{background:var(--ok)}
+.mv.dn .tr i{background:var(--bad)}
+.mv .dv{
+  text-align:right;font:600 13px var(--sans);font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.mv.up .dv{color:var(--ok-tx)}
+.mv.dn .dv{color:var(--bad-tx)}
+.mv .dv small{display:block;font-weight:400;font-size:11px;color:var(--tx3)}
+
+/* ------------------------------------------------------------ brand coverage */
+
+/* The cell is a count, not a total: how many of a state's pharmacies carry the
+   brand. Colouring by sales would have made a big state dark everywhere and
+   hidden the empty cells, which are the only part worth acting on. */
+.cvt th.cv,.cvt td.cv{text-align:center;width:38px;padding-left:4px;padding-right:4px}
+.cvt th.cv{font-size:9.5px;letter-spacing:.02em;writing-mode:vertical-rl;transform:rotate(180deg);height:74px}
+.cvt td.cv{font:600 12px var(--num);font-variant-numeric:tabular-nums}
+.cvt td.c0{background:var(--surface-2);color:transparent}
+.cvt td.c1{background:#0077c81f;color:var(--tx2)}
+.cvt td.c2{background:#0077c840;color:var(--tx)}
+.cvt td.c3{background:#0077c870;color:#fff}
+.cvt td.c4{background:var(--blue);color:#fff}
+.cvkey{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:11.5px;color:var(--tx3)}
+.cvkey i{width:20px;height:12px;border-radius:2px;display:inline-block}
+.cvkey i.c0{background:var(--surface-2);border:1px solid var(--line)}
+.cvkey i.c1{background:#0077c81f}
+.cvkey i.c2{background:#0077c840}
+.cvkey i.c3{background:#0077c870}
+.cvkey i.c4{background:var(--blue)}
+
+/* ---------------------------------------------------------------- income mix */
+
+.imchart{display:flex;align-items:flex-end;gap:14px;height:190px;padding-top:8px}
+.imcol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0}
+.imstack{
+  display:flex;flex-direction:column;border-radius:var(--r) var(--r) 0 0;overflow:hidden;
+  min-height:4px;
+}
+.imstack i{display:block;width:100%}
+.imstack i.a{background:var(--blue)}
+.imstack i.b{background:var(--cyan)}
+.imstack i.c{background:#9ed8f2}
+.imv{
+  font:600 11.5px var(--num);font-variant-numeric:tabular-nums;color:var(--tx);
+  text-align:center;margin-top:7px;
+}
+.iml{font-size:10.5px;color:var(--tx3);text-align:center;margin-top:1px;
+     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.imkey{display:flex;gap:18px;margin-top:14px;flex-wrap:wrap;font-size:12px;color:var(--tx2)}
+.imkey span{display:flex;align-items:center;gap:7px}
+.imkey i{width:11px;height:11px;border-radius:2px}
+.imkey i.a{background:var(--blue)}
+.imkey i.b{background:var(--cyan)}
+.imkey i.c{background:#9ed8f2}

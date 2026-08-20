@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=dc459f7026">
+<link rel="stylesheet" href="assets/app.css?v=9b4a83e458">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -641,6 +641,172 @@ function renderMap(byPharmacy, byState) {
     '</div>', '');
 }
 
+/* ------------------------------------------------------------- the analysis */
+
+/* A league table answers "who is biggest", which the operator already knows.
+ * These three answer the questions a monthly business actually has to act on. */
+
+/* ---- 1. what moved, and who went quiet -------------------------------------
+ *
+ * Ordered by the SIZE of the swing, not by sales: a small pharmacy that halved
+ * matters more than a large one that drifted two percent, and ordering by sales
+ * would bury it. Bars run both ways from a centre line so a fall is not just a
+ * number with a minus sign in front of it. */
+function renderMovers(d) {
+  var rows = d.movers || [], dormant = d.dormant || [];
+
+  if (!d.previous) {
+    return xcard('What changed',
+      '<div class="empty"><b>Needs a second month</b>' +
+      '<p>This compares a month against the one before it. ' +
+      (d.latest ? '<b>' + esc(CB.periodLabel(d.latest)) + '</b> is the only month finalised so far, so '
+                : 'Nothing is finalised yet, so ') +
+      'there is nothing to compare it with. It fills itself in once the next month is finalised.</p></div>', '');
+  }
+
+  var up = rows.filter(function (r) { return Number(r.delta) > 0; }).slice(0, 6);
+  var down = rows.filter(function (r) { return Number(r.delta) < 0; }).slice(0, 6);
+  var max = Math.max.apply(null, [1].concat(rows.slice(0, 12).map(function (r) {
+    return Math.abs(Number(r.delta)); })));
+
+  function line(r) {
+    var v = Number(r.delta), w = (Math.abs(v) / max * 100).toFixed(1);
+    var pct = r.pct == null ? 'new' : (v > 0 ? '+' : '') + r.pct + '%';
+    return '<div class="mv ' + (v > 0 ? 'up' : 'dn') + '">' +
+      '<span class="who">' + esc(r.name) +
+        '<small>' + esc(r.town || '') + '</small></span>' +
+      '<span class="tr"><i style="width:' + w + '%"></i></span>' +
+      '<span class="dv">' + (v > 0 ? '+' : '−') + M(Math.abs(v)) +
+        '<small>' + pct + '</small></span></div>';
+  }
+
+  var body =
+    '<div class="mvhd">Gained</div>' +
+    (up.length ? up.map(line).join('') : '<div class="mut">Nothing rose this month.</div>') +
+    '<div class="mvhd dn">Fell</div>' +
+    (down.length ? down.map(line).join('') : '<div class="mut">Nothing fell this month.</div>');
+
+  /* The dormant list is the part that costs money. A pharmacy that sold last
+     month and nothing this month is still holding consigned stock. */
+  if (dormant.length) {
+    body += '<div class="note warn" style="margin-top:16px"><b>' + dormant.length +
+      ' pharmacy(s) sold nothing this month</b> after ' +
+      M(dormant.reduce(function (t, x) { return t + Number(x.lastGross || 0); }, 0)) +
+      ' in ' + esc(CB.periodLabel(d.previous)) + '. Consigned stock does not come back on its own &mdash; ' +
+      'these are worth a call.' +
+      '<div class="scroll" style="max-height:170px;margin-top:9px"><table>' +
+      '<tr><th>Pharmacy</th><th>Town</th><th class="num">Sold last month</th></tr>' +
+      dormant.slice(0, 20).map(function (x) {
+        return '<tr><td>' + esc(x.name) + '</td><td class="mut">' + esc(x.town || '') +
+          '</td><td class="num">' + M(x.lastGross) + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  return xcard('What changed &mdash; ' + esc(CB.periodLabel(d.latest)) +
+    ' vs ' + esc(CB.periodLabel(d.previous)), body,
+    '<button class="btn ghost sm" onclick="go(&#39;runs&#39;)">Compare months</button>');
+}
+
+/* ---- 2. brand coverage -----------------------------------------------------
+ *
+ * Growth in a consignment model is not "sell more" - it is "put more brands
+ * into shops that already trade". So the cell is not sales, it is how many of
+ * that state's pharmacies carry the brand: 3 of 16 is an opportunity, 16 of 16
+ * is done. Sales would have shown a big state as dark everywhere and hidden
+ * exactly the gap worth acting on. */
+function renderCoverage(d) {
+  var cov = d.coverage || {};
+  var states = (cov.states || []).slice(0, 8);
+  var cells = cov.cells || [];
+  if (!states.length || !cells.length) return '';
+
+  var brandTotal = {};
+  cells.forEach(function (c) {
+    brandTotal[c.brand] = (brandTotal[c.brand] || 0) + Number(c.gross || 0);
+  });
+  var brands = Object.keys(brandTotal)
+    .sort(function (a, b) { return brandTotal[b] - brandTotal[a]; }).slice(0, 12);
+
+  var byKey = {};
+  cells.forEach(function (c) { byKey[c.state + '|' + c.brand] = c; });
+  var label = {};
+  cells.forEach(function (c) { label[c.brand] = c.brandName; });
+
+  /* brand names are long, so the column head is the code with the name on hover */
+  var head = '<tr><th>State</th><th class="num">Shops</th>' + brands.map(function (b) {
+    return '<th class="cv" title="' + esc(label[b] || b) + '">' + esc(b) + '</th>';
+  }).join('') + '</tr>';
+
+  var body = states.map(function (s) {
+    return '<tr><td><b>' + esc(s.state) + '</b></td><td class="num mut">' + s.n + '</td>' +
+      brands.map(function (b) {
+        var c = byKey[s.state + '|' + b];
+        var shops = c ? c.shops : 0;
+        var ratio = s.n ? shops / s.n : 0;
+        var cls = !shops ? 'c0' : ratio >= 0.999 ? 'c4' : ratio >= 0.6 ? 'c3' : ratio >= 0.3 ? 'c2' : 'c1';
+        return '<td class="cv ' + cls + '" title="' + esc(label[b] || b) + ' — ' +
+          shops + ' of ' + s.n + ' pharmacies in ' + esc(s.state) +
+          (c ? ', ' + M(c.gross) : '') + '">' + (shops || '') + '</td>';
+      }).join('') + '</tr>';
+  }).join('');
+
+  return xcard('Brand coverage by state',
+    '<div class="hint" style="margin-bottom:12px">How many of each state&rsquo;s pharmacies carry each ' +
+    'brand. An empty cell is a brand that state does not stock at all &mdash; in a consignment business ' +
+    'that is where the next month&rsquo;s growth is, not in selling harder to the shops already carrying it.</div>' +
+    '<div class="scroll"><table class="cvt">' + head + body + '</table></div>' +
+    '<div class="cvkey"><span>Share of that state&rsquo;s pharmacies</span>' +
+      '<i class="c0"></i><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i>' +
+      '<span>none &rarr; all</span></div>',
+    '<button class="btn ghost sm" onclick="go(&#39;master&#39;)">Brand owners</button>');
+}
+
+/* ---- 3. where the margin comes from ---------------------------------------
+ *
+ * RM75 a pharmacy, 3.8% of gross and 0.8% insurance behave completely
+ * differently as the business grows: the first is flat per shop, the others
+ * scale with sales. Stacked by month, the shape of that answers whether growth
+ * is coming from more shops or from bigger shops. */
+function renderIncomeMix(d) {
+  var rows = d.feesByPeriod || [];
+  if (!rows.length) return '';
+
+  var max = Math.max.apply(null, [1].concat(rows.map(function (r) {
+    return Number(r.mgmt) + Number(r.service) + Number(r.insurance); })));
+
+  var bars = rows.map(function (r) {
+    var m = Number(r.mgmt), s = Number(r.service), i = Number(r.insurance);
+    var tot = m + s + i;
+    return '<div class="imcol">' +
+      '<div class="imstack" style="height:' + (tot / max * 100).toFixed(1) + '%">' +
+        '<i class="a" style="height:' + (m / tot * 100).toFixed(1) + '%" title="Management fee ' + M(m) + '"></i>' +
+        '<i class="b" style="height:' + (s / tot * 100).toFixed(1) + '%" title="Service fee ' + M(s) + '"></i>' +
+        '<i class="c" style="height:' + (i / tot * 100).toFixed(1) + '%" title="Insurance ' + M(i) + '"></i>' +
+      '</div>' +
+      '<div class="imv">' + M2(tot) + '</div>' +
+      '<div class="iml">' + esc(CB.periodLabel(r.period)) + '</div>' +
+      '</div>';
+  }).join('');
+
+  var t = rows.reduce(function (a, r) {
+    a.m += Number(r.mgmt); a.s += Number(r.service); a.i += Number(r.insurance); return a;
+  }, { m: 0, s: 0, i: 0 });
+  var all = t.m + t.s + t.i || 1;
+
+  return xcard('Where the margin comes from',
+    '<div class="imchart">' + bars + '</div>' +
+    '<div class="imkey">' +
+      '<span><i class="a"></i>Management fee ' + (t.m / all * 100).toFixed(0) + '%</span>' +
+      '<span><i class="b"></i>Service fee ' + (t.s / all * 100).toFixed(0) + '%</span>' +
+      '<span><i class="c"></i>Insurance ' + (t.i / all * 100).toFixed(0) + '%</span>' +
+    '</div>' +
+    '<div class="hint" style="margin-top:12px">The management fee is flat per pharmacy; the other two ' +
+    'scale with sales. Which share grows tells you whether the month grew by adding shops or by the ' +
+    'shops you already have selling more.' +
+    (rows.length < 2 ? ' <b>One month cannot show a trend</b> &mdash; the shape appears from the second.' : '') +
+    '</div>', '');
+}
+
 function renderDash() {
   var host = $('#dashBody');
   if (!host) return;
@@ -712,6 +878,8 @@ function renderDash() {
     }
 
     h += '</div>';
+    h += '<div class="xgrid" style="margin-top:16px">' +
+         renderMovers(d) + renderCoverage(d) + renderIncomeMix(d) + '</div>';
     host.innerHTML = h;
   }, function (e) {
     host.innerHTML = '<div class="xcard"><div class="xb"><div class="note warn">' +
