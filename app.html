@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=6dd643769c">
+<link rel="stylesheet" href="assets/app.css?v=aa92432bfa">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -38,15 +38,19 @@
       <button data-p="cfg">Settings</button>
       <button data-p="users" id="navUsers" style="display:none">Access</button>
     </nav>
+    <!-- Only the avatar rides the rail. The name and role live in the menu it
+         opens, because spelling them out cost about 230px and pushed the whole
+         right-hand group onto a second row - which is what Xero avoids by
+         keeping this side to icons. -->
     <div class="tbr">
-      <div class="periodbox">
-        <label for="period">Period</label>
-        <input type="month" id="period">
-      </div>
-      <div class="who" id="who">
-        <div class="av" id="whoAv">·</div>
-        <div class="nm"><b id="whoName">…</b><span id="whoRole"></span></div>
-        <button class="btn sm link" onclick="signOut()">Sign out</button>
+      <button class="ident" id="identBtn" aria-haspopup="true" aria-expanded="false"
+              onclick="toggleIdent(event)" title="Account">
+        <span class="av" id="whoAv">&middot;</span>
+      </button>
+      <div class="identmenu" id="identMenu" hidden>
+        <div class="im-hd"><b id="whoName">&hellip;</b><span id="whoEmail"></span></div>
+        <div class="im-role"><span class="ro" id="whoRole"></span></div>
+        <button class="btn ghost sm wide" onclick="signOut()">Sign out</button>
       </div>
     </div>
   </div>
@@ -54,9 +58,15 @@
 
 <header>
   <div class="hd">
-    <div>
+    <div class="hd-t">
       <h1 id="pageTitle">Import</h1>
       <div class="sub" id="pageSub">Pharmacy sold-out list &rarr; Xero invoices and a settlement statement for every brand owner</div>
+    </div>
+    <!-- The period is a parameter of the month being billed, not application
+         chrome, so it belongs beside the page's own actions. -->
+    <div class="periodbox">
+      <label for="period">Period</label>
+      <input type="month" id="period">
     </div>
     <div class="actions" id="pageActions"></div>
   </div>
@@ -352,6 +362,7 @@ $('#nav').addEventListener('click', function (e) {
 /* Title, one line saying what the page is for, and the page's own actions on
  * the same line at the right - Xero's arrangement. The third entry is markup so
  * a page can offer its primary action without the operator hunting for it. */
+var PERIOD_PAGES = ['dash', 'import', 'review', 'settle', 'out', 'runs'];
 var PAGE = {
   dash:   ['Business overview', 'Where the consignment sales came from, across every finalised month',
            '<button class="btn ghost" onclick="renderDash()">Refresh</button>'],
@@ -380,6 +391,11 @@ function go(p) {
     $('#pageSub').innerHTML = t[1];
     /* read-only accounts get the page's description but none of its verbs */
     $('#pageActions').innerHTML = document.body.classList.contains('readonly') ? '' : (t[2] || '');
+    /* The period selects a month to bill, so it only belongs on the pages that
+     * bill one. Master data and settings are not monthly, and a control that
+     * does nothing where it sits teaches people to ignore it where it counts. */
+    var pb = $('header .periodbox');
+    if (pb) pb.style.display = PERIOD_PAGES.indexOf(p) < 0 ? 'none' : '';
   }
   if (p === 'dash') renderDash();
   if (p === 'review') renderReview();
@@ -1954,6 +1970,29 @@ function setRole(id, role, active) {
 /* ------------------------------------------------------------- session */
 function signOut() { DB.signOut().then(function () { location.href = 'index.html'; }); }
 
+/* The account menu. A menu that only opens is a trap, so it closes on a click
+ * anywhere else and on Escape, and the button reports its state to a screen
+ * reader rather than only looking different. */
+function setIdent(open) {
+  var m = $('#identMenu'), b = $('#identBtn');
+  if (!m || !b) return;
+  m.hidden = !open;
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  b.classList.toggle('on', open);
+}
+function toggleIdent(e) {
+  if (e) e.stopPropagation();
+  setIdent($('#identMenu').hidden);
+}
+document.addEventListener('click', function (e) {
+  if (!$('#identMenu') || $('#identMenu').hidden) return;
+  if (e.target.closest('#identMenu') || e.target.closest('#identBtn')) return;
+  setIdent(false);
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') setIdent(false);
+});
+
 function gate(title, msg) {
   $('#gateTitle').textContent = title;
   $('#gateMsg').innerHTML = msg;
@@ -1994,7 +2033,12 @@ function start() {
       document.body.className = CAN_WRITE ? 'can-write' : 'readonly';
       $('#whoAv').textContent = (me.full_name || me.email).trim().charAt(0).toUpperCase();
       $('#whoName').textContent = me.full_name || me.email;
-      $('#whoRole').innerHTML = '<span class="ro ' + esc(me.role) + '">' + esc(me.role) + '</span>';
+      $('#whoEmail').textContent = me.email;
+      $('#whoRole').className = 'ro ' + me.role;
+      $('#whoRole').textContent = me.role;
+      // the rail shows only an initial, so the full identity has to be reachable
+      // without opening the menu - a hover is cheaper than a click
+      $('#identBtn').title = (me.full_name || me.email) + ' — ' + me.role;
       if (me.role === 'admin') { $('#navUsers').style.display = ''; renderUsers(); }
 
       return Promise.all([DB.loadSettings(), DB.loadMaster(), loadRuns()])

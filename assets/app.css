@@ -91,78 +91,103 @@ a:hover{color:var(--blue-dk)}
 
 /* ------------------------------------------------------------------ header */
 
-/* The blue rail: identity and navigation, the way Xero puts them, so moving
-   between the two applications all day does not mean re-learning the furniture. */
+/* The blue rail: who you are and where you can go, the way Xero arranges them,
+   so moving between the two applications all day does not mean re-learning the
+   furniture.
+
+   ONE ROW, and it has to stay one row. The first version spelled out the user's
+   name and role and carried the period picker up here too; at 1440px that came
+   to 1536px of content, so the whole right-hand group wrapped onto a second row
+   and the role badge overflowed its own 32px pill. Xero keeps this side to
+   icons for exactly this reason. The name now lives in the menu the avatar
+   opens, and the period moved into the page header where it belongs - it is a
+   parameter of the month being billed, not application chrome. */
 .topbar{background:var(--blue);color:#fff}
 .tb{
-  max-width:1500px;margin:0 auto;padding:0 24px;min-height:56px;
-  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  max-width:1500px;margin:0 auto;padding:0 24px;height:56px;
+  display:flex;align-items:center;gap:16px;
 }
 .tb .mark{
-  width:30px;height:30px;border-radius:5px;flex:none;display:grid;place-items:center;
+  width:30px;height:30px;border-radius:6px;flex:none;display:grid;place-items:center;
   background:#fff;color:var(--blue-dk);font:700 10.5px var(--sans);letter-spacing:.02em;
 }
 .tb .org{
   font:600 14px var(--sans);color:#fff;white-space:nowrap;
-  padding-right:14px;margin-right:2px;border-right:1px solid #ffffff33;
+  padding-right:16px;border-right:1px solid #ffffff33;
 }
-.tbr{margin-left:auto;display:flex;align-items:center;gap:10px}
+.tbr{margin-left:auto;display:flex;align-items:center;gap:8px;position:relative}
 
-/* on the blue rail these two stop being white boxes and become part of it */
-.tb .periodbox{background:#ffffff1f;border-color:#ffffff40;height:32px}
-.tb .periodbox label{color:#ffffffcc}
-.tb .periodbox input{background:#fff;border-radius:3px;height:24px}
-.tb .who{background:#ffffff1f;border-color:#ffffff40;height:32px;padding:0 6px 0 10px}
-.tb .who .av{background:#fff;color:var(--blue-dk);width:22px;height:22px;font-size:11px}
-.tb .who .nm b{color:#fff}
-.tb .who .nm span{color:#ffffffb3}
-.tb .who .btn.link{color:#fff}
-.tb .who .btn.link:hover{color:#fff;text-decoration:underline}
+/* ------------------------------------------------------------- account menu */
 
-header{background:var(--surface);border-bottom:1px solid var(--line);padding:20px 0 18px}
-.hd{max-width:1500px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.hd h1{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.015em}
-.hd .sub{color:var(--tx2);font-size:13px;margin-top:5px;max-width:78ch;line-height:1.55}
-.spacer{flex:1}
+.ident{
+  width:32px;height:32px;padding:0;border:0;border-radius:50%;cursor:pointer;
+  background:transparent;display:grid;place-items:center;
+  transition:box-shadow .14s;
+}
+.ident .av{
+  width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+  background:#fff;color:var(--blue-dk);font:700 12.5px var(--sans);
+}
+.ident:hover,.ident.on{box-shadow:0 0 0 2px #ffffff8c}
+.ident:focus-visible{outline:2px solid #fff;outline-offset:2px}
 
-.periodbox{
-  display:flex;align-items:center;gap:9px;height:var(--h);
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0 10px;
+.identmenu{
+  position:absolute;right:0;top:42px;z-index:60;min-width:236px;
+  background:var(--surface);color:var(--tx);
+  border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 10px 28px -8px #1b273336, 0 2px 6px -2px #1b273320;
+  padding:14px;
 }
-.periodbox label{
-  font-size:11px;color:var(--tx3);text-transform:uppercase;
-  letter-spacing:.06em;font-weight:600;white-space:nowrap;
-}
-.periodbox input{height:28px;padding:0 8px;font:500 13px var(--num);font-variant-numeric:tabular-nums}
-
-.who{
-  display:flex;align-items:center;gap:10px;height:var(--h);
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0 6px 0 12px;
-}
-.who .av{
-  width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;
-  background:var(--blue);color:#fff;font:700 12px var(--sans);
-}
-.who .nm{font-size:12.5px;line-height:1.2}
-.who .nm b{display:block;font-weight:600}
-.who .nm span{color:var(--tx3);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.identmenu[hidden]{display:none}
+.identmenu .im-hd b{display:block;font:600 13.5px var(--sans);line-height:1.3}
+.identmenu .im-hd span{display:block;color:var(--tx3);font-size:12px;margin-top:2px;word-break:break-all}
+.identmenu .im-role{margin:11px 0 13px}
 
 /* --------------------------------------------------------------- navigation */
 
-nav{display:flex;gap:0;flex-wrap:wrap;align-self:stretch;align-items:stretch}
+nav{display:flex;align-self:stretch;align-items:stretch}
 nav button{
   position:relative;background:transparent;border:0;color:#ffffffd9;
-  padding:0 14px;font:500 13.5px var(--sans);cursor:pointer;
+  padding:0 13px;font:500 13.5px var(--sans);cursor:pointer;
   transition:color .14s,background .14s;white-space:nowrap;
 }
 nav button::after{
-  content:'';position:absolute;left:8px;right:8px;bottom:0;height:3px;background:#fff;
+  content:'';position:absolute;left:7px;right:7px;bottom:0;height:3px;background:#fff;
   border-radius:2px 2px 0 0;transform:scaleX(0);transition:transform .18s ease;
 }
 nav button:hover{color:#fff;background:#ffffff1a}
 nav button.on{color:#fff;font-weight:600}
 nav button.on::after{transform:scaleX(1)}
 nav button:focus-visible{outline:2px solid #fff;outline-offset:-3px}
+
+/* ------------------------------------------------------------- page heading */
+
+/* Title, the sentence that says what this page is for, then the period and the
+   page's own actions - all on one line, the way a Xero page states itself. */
+header{background:var(--surface);border-bottom:1px solid var(--line);padding:22px 0 20px}
+.hd{
+  max-width:1500px;margin:0 auto;padding:0 24px;
+  display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+}
+.hd-t{min-width:0;flex:1 1 380px}
+.hd h1{font-size:25px;line-height:1.18;font-weight:700;letter-spacing:-.018em}
+.hd .sub{color:var(--tx2);font-size:13px;margin-top:6px;max-width:78ch;line-height:1.55}
+.hd .actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.spacer{flex:1}
+
+.periodbox{
+  display:flex;align-items:center;gap:9px;height:var(--h);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0 4px 0 12px;
+}
+.periodbox label{
+  font-size:11px;color:var(--tx3);text-transform:uppercase;
+  letter-spacing:.06em;font-weight:600;white-space:nowrap;
+}
+.periodbox input{
+  height:28px;padding:0 6px;font:500 13px var(--num);
+  font-variant-numeric:tabular-nums;border:0;background:transparent;
+}
+.periodbox:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px #0077c81f}
 
 /* ------------------------------------------------------------------ panels */
 
@@ -265,11 +290,28 @@ input[type=checkbox]{
 
 /* ------------------------------------------------------------------- upload */
 
+/* A 48px-tall dashed void is a lot of page spent saying "nothing here yet".
+   Tightened, given a mark to aim at, and lifted on hover so it reads as a
+   target rather than a placeholder. */
 .drop{
-  border:1.5px dashed var(--line-strong);border-radius:var(--r-lg);
-  padding:48px 22px;text-align:center;color:var(--tx2);cursor:pointer;background:var(--surface-2);
-  transition:border-color .16s,background .16s,color .16s;
+  border:1.5px dashed var(--line-strong);border-radius:10px;
+  padding:30px 22px;text-align:center;color:var(--tx2);cursor:pointer;background:var(--surface-2);
+  transition:border-color .16s,background .16s,color .16s,box-shadow .16s;
 }
+.drop::before{
+  content:'';display:block;width:38px;height:38px;margin:0 auto 12px;border-radius:9px;
+  background:var(--blue-tint);border:1px solid #0077c833;
+  /* an upward arrow into a tray, drawn rather than fetched */
+  background-image:
+    linear-gradient(var(--blue),var(--blue)),
+    linear-gradient(var(--blue),var(--blue)),
+    linear-gradient(var(--blue),var(--blue));
+  background-repeat:no-repeat;
+  background-size:2px 13px, 9px 2px, 14px 2px;
+  background-position:center 11px, center 11px, center 26px;
+  transition:background-color .16s,border-color .16s;
+}
+.drop:hover,.drop.hot{box-shadow:0 6px 18px -10px #0077c866}
 .drop:hover,.drop.hot{border-color:var(--blue);background:var(--blue-tint);color:var(--tx)}
 .drop b{display:block;font:600 16px/1.3 var(--sans);color:var(--tx);margin-bottom:6px}
 
@@ -424,23 +466,48 @@ details>summary:hover{color:var(--blue-dk)}
 
 /* ------------------------------------------------------------ progress rail */
 
-.steps{display:flex;gap:0;margin-bottom:20px;flex-wrap:wrap}
-.steps div{
-  flex:1;min-width:156px;padding:11px 15px;position:relative;
-  background:var(--surface);border:1px solid var(--line);border-right:0;
-  font-size:12px;color:var(--tx3);
+/* Four boxes in a row read as four separate things. A month-end run is one
+   thing with four moments, so the rail is continuous and the marker travels
+   along it: a filled dot for done, a ringed dot for where you are, a hollow one
+   for what is still ahead. The connector between them carries the same state,
+   which is what makes it read as progress rather than as tabs. */
+.steps{
+  display:flex;gap:0;margin-bottom:22px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:16px 8px 15px;
 }
-.steps div:first-child{border-radius:var(--r) 0 0 var(--r)}
-.steps div:last-child{border-right:1px solid var(--line);border-radius:0 var(--r) var(--r) 0}
+.steps div{
+  flex:1;min-width:150px;position:relative;padding:0 14px 0 34px;
+  font-size:12px;color:var(--tx3);line-height:1.45;
+}
 .steps b{
   display:block;font:600 11px var(--sans);text-transform:uppercase;
-  letter-spacing:.06em;margin-bottom:2px;color:var(--tx2);
+  letter-spacing:.06em;margin-bottom:3px;color:var(--tx2);
 }
-.steps div.done{color:var(--ok-tx);background:var(--ok-bg)}
+/* the dot */
+.steps div::before{
+  content:'';position:absolute;left:12px;top:2px;width:11px;height:11px;border-radius:50%;
+  background:var(--surface);border:2px solid var(--line-strong);
+  transition:background .18s,border-color .18s,box-shadow .18s;
+}
+/* the rail, drawn from this dot to the next one */
+.steps div::after{
+  content:'';position:absolute;left:28px;right:-6px;top:7px;height:2px;
+  background:var(--line);transition:background .18s;
+}
+.steps div:last-child::after{display:none}
+
+.steps div.done{color:var(--tx2)}
 .steps div.done b{color:var(--ok-tx)}
-.steps div.now{background:var(--blue-tint);border-color:#0077c84d}
+.steps div.done::before{background:var(--ok-tx);border-color:var(--ok-tx)}
+.steps div.done::after{background:var(--ok-tx)}
+
+.steps div.now{color:var(--tx)}
 .steps div.now b{color:var(--blue-dk)}
-.steps div.now::after{content:'';position:absolute;left:-1px;right:-1px;top:-1px;height:3px;background:var(--cyan)}
+.steps div.now::before{
+  background:var(--blue);border-color:var(--blue);
+  box-shadow:0 0 0 4px #0077c826;
+}
 
 /* ------------------------------------------------------------- write access */
 
@@ -448,17 +515,29 @@ details>summary:hover{color:var(--blue-dk)}
 body.can-write .ro-only{display:inline-flex}
 body.readonly input,body.readonly select,body.readonly textarea{pointer-events:none;opacity:.6}
 
+/* Nine menu items and a company name stop fitting well before the phone
+   breakpoint, so the rail is allowed to scroll sideways rather than wrap - the
+   height of the bar stays fixed and predictable, which is what makes the rest
+   of the page line up. */
+@media (max-width:1180px){
+  .tb{gap:12px}
+  nav{overflow-x:auto;scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{padding:0 11px}
+}
 @media (max-width:720px){
   .wrap,.hd,.tb{padding-left:15px;padding-right:15px}
-  .tb{padding-top:10px;padding-bottom:10px}
-  .tbr{margin-left:0;width:100%}
-  nav{order:3;width:100%;margin-top:4px}
-  nav button{padding:9px 11px}
-  nav button::after{left:4px;right:4px}
-  .hd h1{font-size:20px}
+  .tb .org{font-size:13px;padding-right:12px}
+  .hd{gap:14px}
+  .hd h1{font-size:21px}
+  .hd .sub{font-size:12.5px}
   .card{padding:16px}
+  .card>h2{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
+  .cardfoot{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
   .kpi .v{font-size:20px}
   button.btn{padding:0 13px}
+  .steps{padding:14px 4px}
+  .steps div{min-width:132px;padding-left:30px}
 }
 
 @media (prefers-reduced-motion:reduce){
