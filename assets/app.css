@@ -630,3 +630,33 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
   font:600 13.5px var(--sans);color:var(--tx);
   font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;
 }
+
+/* ------------------------------------------------------------------ the map */
+
+/* Malaysia is about three times as wide as it is tall once Borneo is included,
+   so the map reads as a band across the top of the dashboard rather than a
+   square panel. Full width is what makes that band legible. */
+.mapwrap{width:100%;overflow:hidden;border-radius:var(--r);background:var(--surface-2)}
+.mymap{display:block;width:100%;height:auto}
+.mymap .spot{
+  fill:var(--blue-dk);fill-opacity:.62;stroke:#fff;stroke-width:1.1;
+  transition:fill-opacity .14s;cursor:default;
+}
+.mymap .spot:hover{fill-opacity:.95}
+/* the leader gets a ring rather than a different colour: it is the same kind of
+   thing as every other dot, just the largest one */
+.mymap .spot.top{fill:var(--blue-dk);fill-opacity:.95;stroke:var(--cyan);stroke-width:2.4}
+
+.maplegend{display:flex;gap:26px;margin-top:16px;flex-wrap:wrap;align-items:flex-start}
+.mlist{display:flex;flex-direction:column;gap:7px;min-width:220px}
+.mlrow{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--tx)}
+.mlrow .sw{width:14px;height:14px;border-radius:3px;background:var(--blue);flex:none}
+.mlrow .nm{flex:1}
+.mlrow .amt{font-weight:600;font-variant-numeric:tabular-nums}
+.mnote{flex:1;min-width:280px;font-size:12.5px;line-height:1.6;color:var(--tx2);max-width:70ch}
+.mnote b{color:var(--tx);font-weight:600}
+
+@media (max-width:720px){
+  .maplegend{gap:16px}
+  .mlist{min-width:0;width:100%}
+}
