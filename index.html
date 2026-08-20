@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>CTG4U Consignment Billing</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>%F0%9F%8F%A5</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/app.css?v=6dd643769c">
+<style>
+/* Sign-in: a single card on the pale canvas, the way Xero opens. */
+body{display:grid;place-items:center;min-height:100vh;padding:28px;background:var(--canvas)}
+.auth{width:100%;max-width:404px}
+
+.brand{text-align:center;margin-bottom:26px}
+.brand .mark{
+  width:52px;height:52px;border-radius:10px;margin:0 auto 14px;
+  display:grid;place-items:center;font-size:25px;
+  background:var(--blue);box-shadow:0 2px 6px #0077c840;
+}
+.brand h1{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.brand .rule{width:30px;height:2px;background:var(--cyan);border-radius:2px;margin:12px auto 11px}
+.brand p{
+  color:var(--tx3);font-size:10.5px;margin:0;
+  text-transform:uppercase;letter-spacing:.14em;font-weight:600;
+}
+
+.auth .card{padding:26px 26px 24px;box-shadow:var(--shadow)}
+.auth label{
+  display:block;font:600 11px var(--sans);color:var(--tx2);
+  text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;
+}
+.auth input{width:100%;margin-bottom:16px;padding:9px 12px;font-size:14px}
+.auth button.btn{width:100%;padding:11px;font-size:14px;margin-top:2px}
+
+.tabs{display:flex;gap:0;margin-bottom:22px;border-bottom:1px solid var(--line)}
+.tabs button{
+  flex:1;background:transparent;border:0;border-bottom:3px solid transparent;
+  color:var(--tx2);font:500 13.5px var(--sans);padding:10px 8px;cursor:pointer;
+  transition:color .14s,border-color .14s;
+}
+.tabs button:hover{color:var(--tx)}
+.tabs button.on{color:var(--blue);font-weight:600;border-bottom-color:var(--cyan)}
+
+.alt{text-align:center;margin-top:16px;font-size:12.5px}
+.alt a{cursor:pointer;color:var(--blue);text-decoration:none}
+.alt a:hover{color:var(--blue-dk);text-decoration:underline}
+
+.foot{
+  text-align:center;color:var(--tx3);font-size:11.5px;margin-top:22px;line-height:1.65;
+  max-width:36ch;margin-left:auto;margin-right:auto;
+}
+</style>
+</head>
+<body>
+
+<div class="auth">
+  <div class="brand">
+    <div class="mark">🏥</div>
+    <h1>CTG4U RETAIL SDN BHD</h1>
+    <div class="rule"></div>
+    <p>Consignment Billing</p>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button id="tSignIn" class="on" onclick="mode('in')">Sign in</button>
+      <button id="tSignUp" onclick="mode('up')">Request access</button>
+    </div>
+
+    <form id="form" onsubmit="return false">
+      <div id="nameWrap" style="display:none">
+        <label for="fullName">Full name</label>
+        <input type="text" id="fullName" autocomplete="name">
+      </div>
+
+      <label for="email">Email</label>
+      <input type="email" id="email" autocomplete="username" required>
+
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+
+      <button class="btn" id="go" type="submit">Sign in</button>
+    </form>
+
+    <div class="alt" id="altLine">
+      <a onclick="forgot()">Forgot your password?</a>
+    </div>
+  </div>
+
+  <div class="foot">
+    New accounts are reviewed by an administrator before access is granted.
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="assets/supabase.min.js?v=a38f466463"></script>
+<script src="assets/config.js?v=8e9d0c7c63"></script>
+<script src="assets/db.js?v=df0a8e0b6d"></script>
+<script>
+var MODE = 'in';
+
+function toast(msg, kind) {
+  var d = document.createElement('div');
+  d.className = kind || ''; d.textContent = msg;
+  document.getElementById('toast').appendChild(d);
+  setTimeout(function () { d.remove(); }, kind === 'bad' ? 9000 : 5000);
+}
+
+function mode(m) {
+  MODE = m;
+  document.getElementById('tSignIn').className = m === 'in' ? 'on' : '';
+  document.getElementById('tSignUp').className = m === 'up' ? 'on' : '';
+  document.getElementById('nameWrap').style.display = m === 'up' ? '' : 'none';
+  document.getElementById('go').textContent = m === 'up' ? 'Request access' : 'Sign in';
+  document.getElementById('password').autocomplete = m === 'up' ? 'new-password' : 'current-password';
+  document.getElementById('altLine').style.display = m === 'up' ? 'none' : '';
+}
+
+function forgot() {
+  var email = document.getElementById('email').value.trim();
+  if (!email) { toast('Type your email address first', 'bad'); return; }
+  DB.resetPassword(email).then(function () {
+    toast('If that address has an account, a reset link is on its way.', 'ok');
+  }, function (e) { toast(e.message, 'bad'); });
+}
+
+document.getElementById('form').onsubmit = function () {
+  var email = document.getElementById('email').value.trim();
+  var pw = document.getElementById('password').value;
+  var name = document.getElementById('fullName').value.trim();
+  var btn = document.getElementById('go');
+  if (!email || !pw) { toast('Email and password are both needed', 'bad'); return false; }
+  if (MODE === 'up' && pw.length < 8) { toast('Use at least 8 characters', 'bad'); return false; }
+
+  btn.disabled = true;
+  btn.textContent = MODE === 'up' ? 'Requesting…' : 'Signing in…';
+
+  var p = MODE === 'up' ? DB.signUp(email, pw, name) : DB.signIn(email, pw);
+  p.then(function (data) {
+    if (MODE === 'up' && !(data.session)) {
+      toast('Check your inbox to confirm the address, then ask an administrator to approve you.', 'ok');
+      btn.disabled = false; btn.textContent = 'Request access';
+      mode('in');
+      return;
+    }
+    location.href = 'app.html';
+  }, function (e) {
+    toast(e.message || 'Could not sign in', 'bad');
+    btn.disabled = false;
+    btn.textContent = MODE === 'up' ? 'Request access' : 'Sign in';
+  });
+  return false;
+};
+
+// A session can arrive later than this line — restored from storage, or handed
+// over by a confirmation link. Redirect whenever it appears, not only now.
+if (DB.unconfigured) {
+  document.getElementById('go').disabled = true;
+} else {
+  DB.onAuth(function (s) { if (s) location.href = 'app.html'; });
+  DB.consumeUrlSession()
+    .catch(function (e) {
+      toast(e.message || 'That link is no longer valid — please sign in below.', 'bad');
+    })
+    .then(function () { return DB.session(); })
+    .then(function (s) { if (s) location.href = 'app.html'; });
+}
+</script>
+</body>
+</html>

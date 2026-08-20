@@ -1,0 +1,2045 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Belt as well as braces: vercel.json sends X-Robots-Tag, but a host without
+     custom headers (GitHub Pages has none) would leave this page indexable. -->
+<meta name="robots" content="noindex,nofollow">
+<title>CTG4U Consignment Billing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/app.css?v=6dd643769c">
+<style>
+/* the access gate is the only rule this page needs beyond the shared stylesheet */
+#gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
+#gate .box{max-width:440px;padding:32px}
+#gate h2{font-size:18px;margin-bottom:10px}
+#gate p{color:var(--tx2);font-size:13.5px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<!-- The blue rail carries identity and navigation, the way Xero does it, so
+     moving between the two all day does not mean re-learning where things are. -->
+<div class="topbar">
+  <div class="tb">
+    <span class="mark" aria-hidden="true">CRS</span>
+    <span class="org">CTG4U RETAIL SDN BHD</span>
+    <nav id="nav" aria-label="Main">
+      <button data-p="dash">Dashboard</button>
+      <button data-p="import" class="on">Import</button>
+      <button data-p="review">Review</button>
+      <button data-p="settle">Settlement</button>
+      <button data-p="out">Outputs</button>
+      <button data-p="runs">History</button>
+      <button data-p="master">Contacts</button>
+      <button data-p="cfg">Settings</button>
+      <button data-p="users" id="navUsers" style="display:none">Access</button>
+    </nav>
+    <div class="tbr">
+      <div class="periodbox">
+        <label for="period">Period</label>
+        <input type="month" id="period">
+      </div>
+      <div class="who" id="who">
+        <div class="av" id="whoAv">·</div>
+        <div class="nm"><b id="whoName">…</b><span id="whoRole"></span></div>
+        <button class="btn sm link" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="hd">
+    <div>
+      <h1 id="pageTitle">Import</h1>
+      <div class="sub" id="pageSub">Pharmacy sold-out list &rarr; Xero invoices and a settlement statement for every brand owner</div>
+    </div>
+    <div class="actions" id="pageActions"></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ========================================================= DASHBOARD -->
+<section class="panel" id="p-dash">
+  <div class="row" style="margin-bottom:16px">
+    <label class="mut" for="dashScope">Show</label>
+    <select id="dashScope" onchange="renderDash()">
+      <option value="all">All finalised months</option>
+      <option value="ytd">This year to date</option>
+      <option value="one">The selected period only</option>
+    </select>
+    <div class="spacer"></div>
+    <button class="btn sm ghost" onclick="renderDash()">Refresh</button>
+  </div>
+  <div id="dashBody"><div class="card"><span class="mut">Loading…</span></div></div>
+</section>
+
+<!-- ============================================================ IMPORT -->
+<section class="panel on" id="p-import">
+  <div class="steps" id="steps"></div>
+
+  <div class="card">
+    <h2>Drop the monthly sold-out list</h2>
+    <div class="hint">Accepts .xlsx / .xls / .csv. Either one sheet per pharmacy (the tab name is used as the pharmacy)
+      or one flat sheet with a pharmacy column. Columns are detected from the data, so renamed or translated
+      headers still work &mdash; check and correct the mapping below before continuing.</div>
+    <div class="drop" id="drop">
+      <b>Drop the file here, or click to choose</b>
+      <span class="mut">.xlsx, .xls or .csv</span>
+    </div>
+    <input type="file" id="file" accept=".xlsx,.xls,.csv" multiple hidden>
+  </div>
+  <div id="packages"></div>
+  <div style="display:none">
+  </div>
+
+  <div id="sheets"></div>
+</section>
+
+<!-- ============================================================ REVIEW -->
+<section class="panel" id="p-review">
+  <div id="reviewBody"><div class="card"><div class="hint">Import a file first.</div></div></div>
+</section>
+
+<!-- ========================================================= SETTLEMENT -->
+<section class="panel" id="p-settle">
+  <div id="settleBody"><div class="card"><div class="hint">Import a file first.</div></div></div>
+</section>
+
+<!-- ============================================================ OUTPUT -->
+<section class="panel" id="p-out">
+  <div id="outBody"><div class="card"><div class="hint">Import a file first.</div></div></div>
+</section>
+
+<!-- ============================================================ MASTER -->
+<section class="panel" id="p-master">
+  <div class="card">
+    <h2>Xero contacts</h2>
+    <div class="hint">In Xero: <b>Contacts &rsaquo; All contacts &rsaquo; Export</b>. Drop that file here and the exact
+      <span class="mono">*ContactName</span> strings are read straight off it &mdash; no typing, so an import can never
+      be rejected for a mis-typed name. Nothing is sent anywhere; the file is read in this browser.</div>
+    <div class="row">
+      <button class="btn sm" onclick="$('#fileXeroContacts').click()">⬆ Import Xero contact export</button>
+      <span class="mut" id="xcStatus">no contact list loaded</span>
+      <input type="file" id="fileXeroContacts" accept=".csv,.xlsx,.xls" hidden>
+    </div>
+    <div id="xcPanel"></div>
+  </div>
+
+  <div class="card">
+    <h2>Brand owners</h2>
+    <div class="hint">Who the goods belong to. Each one gets its own statement, its own fee invoice and its own payout bill.</div>
+    <div class="scroll"><table id="tblProjects"></table></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn sm" onclick="addProject()">+ Add brand owner</button>
+      <button class="btn sm ghost" onclick="exportMaster()">⬇ Export master (xlsx)</button>
+      <button class="btn sm ghost" onclick="importMasterPick()">⬆ Import master (xlsx)</button>
+      <input type="file" id="fileMaster" accept=".xlsx" hidden>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Products &rarr; brand owner</h2>
+    <div class="hint">The mapping that decides whose statement a sale lands on. Names confirmed on the Review tab are
+      remembered here as aliases, so each product only ever needs to be identified once.</div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="prodSearch" placeholder="Search products" style="flex:1;min-width:220px" oninput="renderProducts()">
+      <button class="btn sm" onclick="addProduct()">+ Add product</button>
+    </div>
+    <div class="scroll"><table id="tblProducts"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Pharmacies</h2>
+    <div class="hint">Seeded from CTG4U_Retail_EInvoice_Master.xlsx. <b>Xero contact</b> must match the contact name in Xero exactly.</div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="pharmSearch" placeholder="Search pharmacies" style="flex:1;min-width:220px" oninput="renderPharmacies()">
+      <button class="btn sm" onclick="addPharmacy()">+ Add pharmacy</button>
+    </div>
+    <div class="scroll"><table id="tblPharm"></table></div>
+  </div>
+</section>
+
+<!-- ========================================================== SETTINGS -->
+<section class="panel" id="p-runs">
+  <div class="card">
+    <h2>Billing history</h2>
+    <div class="hint">Every run is kept with the rates that were used at the time and the document numbers
+      that were issued, so an old month can be explained without rebuilding it.</div>
+    <div id="runsList"></div>
+  </div>
+</section>
+
+<section class="panel" id="p-users">
+  <div class="card">
+    <h2>Access</h2>
+    <div class="hint">A new sign-up starts as <b>pending</b> and can see nothing at all until you give it a role.
+      <b>Viewer</b> reads, <b>staff</b> runs the month-end, <b>admin</b> also manages this list.</div>
+    <div id="usersList"></div>
+  </div>
+</section>
+
+<section class="panel" id="p-cfg">
+  <div class="card">
+    <h2>Commercial terms</h2>
+    <div class="hint">These drive every number in the run. Change them here, never in the output files.</div>
+    <div class="grid g3" id="cfgTerms"></div>
+  </div>
+  <div class="card">
+    <h2>Xero connection</h2>
+    <div class="hint">Connect the CTG4U RETAIL organisation once. After that a finalised month can be sent
+      straight into Xero as draft invoices &mdash; no CSV, and nothing created one at a time.</div>
+    <div id="xeroPanel"><span class="mut">Checking…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Xero posting</h2>
+    <div class="note"><b>Agent / pass-through model.</b> Pharmacy collections are <b>not</b> CTG4U revenue &mdash; they are
+      a liability owed to the brand owner (account 320). Only the management fee (500) and service fee (510) hit the P&amp;L.
+</div>
+    <div class="grid g3" id="cfgXero"></div>
+    <div class="note warn"><b>Check before the first import:</b> <span class="mono">*TaxType</span> values must match a tax rate
+      that actually exists in CTG4U RETAIL's Xero, and the account codes must exist in its chart of accounts.
+      Xero rejects the whole CSV row otherwise.</div>
+  </div>
+  <div class="card">
+    <h2>Xero tracking</h2>
+    <div class="hint">Tags every invoice line with a Xero tracking option, so a brand owner&rsquo;s activity
+      reports separately inside Xero without a separate account for each. Leave the category blank to
+      switch it off. Both the category and the option must exist in Xero exactly as spelled &mdash; the
+      connector checks every option it is about to use and refuses the run rather than losing the tag on
+      one line.</div>
+    <div class="grid g3" id="cfgTrack"></div>
+  </div>
+
+  <div class="card">
+    <h2>Document numbering</h2>
+    <div class="grid g3" id="cfgNum"></div>
+  </div>
+  <div class="card">
+    <h2>Data</h2>
+    <div class="row">
+      <button class="btn sm ghost" onclick="backup()">⬇ Export master data (json)</button>
+      <button class="btn sm ghost ro-only" onclick="restorePick()">⬆ Import master data</button>
+      <input type="file" id="fileRestore" accept=".json" hidden>
+    </div>
+    <div class="hint" style="margin:10px 0 0">Master data, settings and every finalised run live in the shared
+      database, so your colleagues see the same figures and a new laptop needs no setup. The export is a
+      point-in-time copy for your own records &mdash; importing it merges rows back in, it never wipes anything.</div>
+  </div>
+</section>
+
+</div>
+<div id="gate"><div class="box">
+  <h2 id="gateTitle">Loading…</h2>
+  <p id="gateMsg">Checking your access.</p>
+  <div style="margin-top:18px"><button class="btn ghost" onclick="signOut()">Sign out</button></div>
+</div></div>
+
+<div id="toast"></div>
+
+<script src="assets/supabase.min.js?v=a38f466463"></script>
+<script src="assets/config.js?v=8e9d0c7c63"></script>
+<script src="assets/db.js?v=df0a8e0b6d"></script>
+<script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
+<script src="assets/calc.js?v=1ec068b8fe"></script>
+<script>
+'use strict';
+var ME = null;                 // the signed-in app_users row
+var CAN_WRITE = false;
+
+var ST = {
+  master: { pharmacies: [], projects: [], products: [] },
+  cfg: CB.cfg({}),
+  sheets: [],       // { file, name, rows, map, pharmFromName, use }
+  packages: [],     // pharmacy billing sheets, read by their own parser
+  packageOwner: '', // the brand owner a package workbook belongs to
+  lines: [],
+  skipped: [],      // total/blank rows that carried money - shown, never hidden
+  settlement: null,
+  billing: null,
+  check: null,      // pharmacy-billed vs brand-owner-owed reconciliation
+  xeroContacts: [], // exact *ContactName strings straight out of Xero
+  runs: [],
+  runId: null       // the draft run these figures belong to, once saved
+};
+
+/* ------------------------------------------------------------ storage */
+/* Settings live in one row. Saving is debounced so dragging a rate slider
+ * does not fire a write per keystroke. */
+var cfgTimer = null;
+function save() {
+  if (!CAN_WRITE) return;
+  clearTimeout(cfgTimer);
+  cfgTimer = setTimeout(function () {
+    DB.saveSettings(ST.cfg).catch(function (e) { toast('Could not save settings: ' + e.message, 'bad'); });
+  }, 400);
+}
+
+function refreshMaster() {
+  return DB.loadMaster().then(function (m) {
+    ST.master = m;
+    recompute();
+    renderProjects(); renderProducts(); renderPharmacies(); renderXeroContacts();
+    return m;
+  });
+}
+
+/* A row edited in one of the master tables. Returns a promise so callers can
+ * report failure instead of leaving the screen showing a value the database
+ * rejected. */
+function persistRow(list, row) {
+  if (list === 'pharmacies') return DB.savePharmacy(row);
+  if (list === 'projects') return DB.saveBrandOwner(row);
+  if (list === 'products') {
+    var bo = ST.master.projects.filter(function (x) { return x.code === row.project; })[0];
+    if (!bo) return Promise.reject(new Error('pick a brand owner for this product first'));
+    if (!row.name) return Promise.reject(new Error('a product needs a name'));
+    return DB.saveProduct({
+      id: row.id, sku: row.sku, name: row.name,
+      brandOwnerId: bo.id, aliases: row.aliases, active: row.active
+    });
+  }
+  return Promise.reject(new Error('unknown list ' + list));
+}
+
+function deleteRow(list, row) {
+  if (list === 'projects') return DB.deleteBrandOwner(row.id);
+  if (list === 'products') return DB.deleteProduct(row.id);
+  if (list === 'pharmacies') return DB.savePharmacy(Object.assign({}, row, { active: false }));
+  return Promise.reject(new Error('unknown list ' + list));
+}
+
+/* --------------------------------------------------------------- util */
+function $(s) { return document.querySelector(s); }
+function el(tag, attrs, html) {
+  var e = document.createElement(tag);
+  if (attrs) for (var k in attrs) { if (k === 'class') e.className = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  if (html != null) e.innerHTML = html;
+  return e;
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function toast(msg, cls) {
+  var d = el('div', { class: cls || '' }, esc(msg));
+  $('#toast').appendChild(d);
+  setTimeout(function () { d.style.opacity = 0; d.style.transition = '.4s'; setTimeout(function () { d.remove(); }, 400); }, cls === 'bad' ? 7000 : 3800);
+}
+var M = CB.money;
+
+function dl(name, content, type) {
+  var blob = content instanceof Blob ? content : new Blob(["﻿" + content], { type: type || 'text/csv;charset=utf-8' });
+  var a = el('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+
+/* ------------------------------------------------------------- tabs */
+$('#nav').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  go(b.dataset.p);
+});
+/* The page title lives outside the panels so the header reads like Xero's:
+ * where you are, then what this page is for. */
+/* Title, one line saying what the page is for, and the page's own actions on
+ * the same line at the right - Xero's arrangement. The third entry is markup so
+ * a page can offer its primary action without the operator hunting for it. */
+var PAGE = {
+  dash:   ['Business overview', 'Where the consignment sales came from, across every finalised month',
+           '<button class="btn ghost" onclick="renderDash()">Refresh</button>'],
+  import: ['Import', 'Pharmacy sold-out list &rarr; Xero invoices and a settlement statement for every brand owner',
+           '<button class="btn" onclick="$(&#39;#file&#39;).click()">Choose a file</button>'],
+  review: ['Review', 'Confirm what was read, and tell the system who owns anything it could not place',
+           '<button class="btn ghost" onclick="go(&#39;import&#39;)">Back to import</button>' +
+           '<button class="btn" onclick="go(&#39;settle&#39;)">Continue to settlement</button>'],
+  settle: ['Settlement', 'What each brand owner is charged, and what is left to remit',
+           '<button class="btn ghost" onclick="go(&#39;review&#39;)">Back to review</button>' +
+           '<button class="btn" onclick="go(&#39;out&#39;)">Continue to outputs</button>'],
+  out:    ['Outputs', 'Finalise the month, then send it to Xero or take the files', ''],
+  runs:   ['History', 'Every month that has been finalised, and what it produced',
+           '<button class="btn ghost" onclick="loadRuns()">Refresh</button>'],
+  master: ['Contacts', 'Pharmacies, brand owners and the packages that map to them', ''],
+  cfg:    ['Settings', 'Rates, account codes, tracking and the Xero connection', ''],
+  users:  ['Access', 'Who can see this, and what they may do', '']
+};
+
+function go(p) {
+  document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('on', b.dataset.p === p); });
+  document.querySelectorAll('.panel').forEach(function (s) { s.classList.toggle('on', s.id === 'p-' + p); });
+  var t = PAGE[p];
+  if (t) {
+    $('#pageTitle').textContent = t[0];
+    $('#pageSub').innerHTML = t[1];
+    /* read-only accounts get the page's description but none of its verbs */
+    $('#pageActions').innerHTML = document.body.classList.contains('readonly') ? '' : (t[2] || '');
+  }
+  if (p === 'dash') renderDash();
+  if (p === 'review') renderReview();
+  if (p === 'settle') renderSettle();
+  if (p === 'out') renderOut();
+  if (p === 'master') { renderXeroContacts(); renderProjects(); renderProducts(); renderPharmacies(); }
+  if (p === 'cfg') { renderCfg(); renderXero(); }
+  if (p === 'runs') loadRuns();
+  if (p === 'users') renderUsers();
+  window.scrollTo(0, 0);
+}
+
+/* ========================================================= DASHBOARD */
+
+/* ========================================================= DASHBOARD */
+
+/* Each row is drawn against the LEADER, not against the total: the question is
+ * "who is biggest", and the eye compares two lengths far better than it
+ * compares two percentages. The share of total is printed alongside, for the
+ * answer a bar cannot give. */
+function rankList(list, top, unit) {
+  if (!list.length) {
+    return '<div class="empty"><b>Nothing finalised yet</b>' +
+      '<p>Once a month is finalised its sales appear here, ranked.</p></div>';
+  }
+  var max = Number(list[0].gross) || 1;
+  var total = list.reduce(function (t, r) { return t + Number(r.gross || 0); }, 0);
+  return '<div class="ranks">' + list.slice(0, top || 8).map(function (r, i) {
+    var g = Number(r.gross || 0);
+    var second = r.projects != null
+      ? r.projects + ' brand' + (r.projects === 1 ? '' : 's')
+      : r.pharmacies + ' pharmac' + (r.pharmacies === 1 ? 'y' : 'ies');
+    return '<div class="rankrow">' +
+      '<span class="n">' + (i + 1) + '</span>' +
+      '<span class="nm">' + esc(r.name) +
+        '<small>' + esc(r.code) + ' &middot; ' + second + '</small>' +
+        '<span class="bar"><i style="width:' + (g / max * 100).toFixed(1) + '%"></i></span></span>' +
+      '<span class="amt">' + M(g) +
+        '<small>' + (total ? (g / total * 100).toFixed(1) : '0.0') + '% of ' + (unit || 'total') + '</small></span>' +
+      '</div>';
+  }).join('') + '</div>';
+}
+
+function xcard(title, body, foot) {
+  return '<div class="xcard"><div class="xh"><h3>' + title + '</h3>' +
+    '<span class="kebab" aria-hidden="true">&#8942;</span></div>' +
+    '<div class="xb">' + body + '</div>' +
+    (foot ? '<div class="xf">' + foot + '</div>' : '') + '</div>';
+}
+
+/* Two figures reading as one sentence, the way Xero states a card. */
+function figs(aVal, aCap, bVal, bCap, plain) {
+  var c = plain ? ' plain' : '';
+  return '<div class="figs">' +
+    '<div><div class="fig">' + aVal + '</div><div class="figcap' + c + '">' + aCap + '</div></div>' +
+    '<div><div class="fig">' + bVal + '</div><div class="figcap' + c + '">' + bCap + '</div></div>' +
+    '</div>';
+}
+
+function renderDash() {
+  var host = $('#dashBody');
+  if (!host) return;
+  var scope = ($('#dashScope') || {}).value || 'all';
+  var per = ST.cfg.period || '';
+  var from = null, to = null;
+  if (scope === 'one' && per) { from = per; to = per; }
+  if (scope === 'ytd' && per) { from = per.slice(0, 4) + '-01'; to = per; }
+
+  host.innerHTML = '<div class="xcard"><div class="xb"><span class="mut">Loading&hellip;</span></div></div>';
+
+  DB.dashboard(from, to).then(function (d) {
+    var T = d.totals || {}, F = d.fees || {};
+    var ph = d.byPharmacy || [], pj = d.byProject || [];
+
+    if (!d.runs) {
+      host.innerHTML = '<div class="xcard"><div class="xb"><div class="empty">' +
+        '<b>No finalised months yet</b>' +
+        '<p>This page counts <b>finalised</b> months only. A draft can still be rebuilt or ' +
+        'abandoned, so counting one would put figures here that were never invoiced.</p>' +
+        '</div></div><div class="xf">' +
+        '<button class="btn" onclick="go(&#39;import&#39;)">Start a month</button>' +
+        '<button class="btn ghost" onclick="go(&#39;runs&#39;)">View history</button>' +
+        '</div></div>';
+      return;
+    }
+
+    var h = '<div class="xgrid">';
+
+    h += xcard('Consignment sales',
+      figs(M(T.gross), T.lines + ' sales lines', M(T.net),
+           'net after ' + (ST.cfg.discountPct || 19.2) + '% discount') +
+      '<div class="mut" style="margin-top:14px">Across ' + d.runs + ' finalised month' +
+      (d.runs === 1 ? '' : 's') + ', ' + T.pharmacies + ' pharmacies and ' + T.projects + ' brand owners.</div>',
+      '<button class="btn ghost sm" onclick="go(&#39;runs&#39;)">View history</button>');
+
+    h += xcard('CTG4U income',
+      figs(M(F.income), 'fees earned', M(F.payout), 'payable to brand owners') +
+      '<div class="mut" style="margin-top:14px">Management fee ' + M(F.mgmt) +
+      ' &middot; service fee ' + M(F.service) + ' &middot; insurance ' + M(F.insurance) +
+      ' &middot; SST ' + M(F.sst) + '.</div>',
+      '<button class="btn ghost sm" onclick="go(&#39;settle&#39;)">Settlement</button>');
+
+    h += xcard('Pharmacies by consignment sales',
+      rankList(ph, 8) +
+      (ph.length > 8 ? '<div class="mut" style="margin-top:12px">' + (ph.length - 8) +
+        ' more not shown</div>' : ''),
+      '<button class="btn ghost sm" onclick="go(&#39;master&#39;)">Manage pharmacies</button>');
+
+    h += xcard('Brand owners by consignment sales',
+      rankList(pj, 8) +
+      (pj.length > 8 ? '<div class="mut" style="margin-top:12px">' + (pj.length - 8) +
+        ' more not shown</div>' : ''),
+      '<button class="btn ghost sm" onclick="go(&#39;master&#39;)">Manage brand owners</button>');
+
+    var per2 = d.byPeriod || [];
+    if (per2.length > 1) {
+      var mx = Math.max.apply(null, per2.map(function (r) { return Number(r.gross || 0); })) || 1;
+      h += xcard('Month by month',
+        '<div class="ranks">' + per2.map(function (r) {
+          return '<div class="rankrow">' +
+            '<span class="n">&nbsp;</span>' +
+            '<span class="nm">' + esc(CB.periodLabel(r.period)) +
+              '<span class="bar"><i style="width:' + (Number(r.gross) / mx * 100).toFixed(1) + '%"></i></span></span>' +
+            '<span class="amt">' + M(r.gross) + '<small>net ' + M(r.net) + '</small></span>' +
+            '</div>';
+        }).join('') + '</div>', '');
+    }
+
+    h += '</div>';
+    host.innerHTML = h;
+  }, function (e) {
+    host.innerHTML = '<div class="xcard"><div class="xb"><div class="note warn">' +
+      '<b>Could not load the dashboard.</b> ' + esc(e.message) + '</div></div></div>';
+  });
+}
+
+function renderSteps() {
+  var n = ST.lines.length;
+  var issues = ST.lines.filter(function (l) { return l.issues.length; }).length;
+  var st = [
+    { t: 'Import', d: ST.sheets.length ? ST.sheets.length + ' sheet(s) read' : 'waiting for a file', ok: !!ST.sheets.length },
+    { t: 'Map', d: n ? (issues ? issues + ' row(s) need attention' : 'all rows resolved') : '-', ok: n > 0 && !issues },
+    { t: 'Settle', d: ST.settlement ? ST.settlement.projects.length + ' brand owner(s)' : '-', ok: !!(ST.settlement && ST.settlement.projects.length) },
+    { t: 'Output', d: ST.settlement ? 'ready' : '-', ok: !!(ST.settlement && ST.settlement.projects.length && !issues) }
+  ];
+  var cur = st.findIndex(function (s) { return !s.ok; });
+  $('#steps').innerHTML = st.map(function (s, i) {
+    return '<div class="' + (s.ok ? 'done' : (i === cur ? 'now' : '')) + '"><b>' + (s.ok ? '✓ ' : (i + 1) + ' · ') + esc(s.t) + '</b>' + esc(s.d) + '</div>';
+  }).join('');
+}
+
+/* ============================================================= IMPORT */
+var drop = $('#drop');
+drop.onclick = function () { $('#file').click(); };
+['dragenter', 'dragover'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('hot'); });
+});
+['dragleave', 'drop'].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('hot'); });
+});
+drop.addEventListener('drop', function (e) { handleFiles(e.dataTransfer.files); });
+$('#file').onchange = function (e) { handleFiles(e.target.files); };
+
+function handleFiles(files) {
+  ST.packages = [];
+  if (!files || !files.length) return;
+  ST.sheets = [];
+  var pending = files.length;
+  Array.prototype.forEach.call(files, function (f) {
+    var r = new FileReader();
+    r.onload = function () {
+      try { readWorkbook(f.name, r.result); }
+      catch (err) { toast('Could not read ' + f.name + ': ' + err.message, 'bad'); }
+      if (--pending === 0) { renderSheets(); renderSteps(); }
+    };
+    r.onerror = function () { toast('Could not open ' + f.name, 'bad'); if (--pending === 0) { renderSheets(); renderSteps(); } };
+    r.readAsArrayBuffer(f);
+  });
+}
+
+function readWorkbook(fname, buf) {
+  var wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
+  wb.SheetNames.forEach(function (sn) {
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: '', raw: true });
+    rows = rows.filter(function (r) { return r.some(function (c) { return c !== '' && c != null; }); });
+    if (rows.length < 2) return;
+
+    /* A pharmacy billing sheet is a cross-tab of packages and states its own
+     * totals, so it is read by its own parser rather than by column detection. */
+    if (CB.isPackageSheet(rows)) {
+      var parsed = CB.parsePackageSheet(rows);
+      // the registered name above the header is what Xero knows the pharmacy as
+      var m = parsed.pharmacyContact
+        ? CB.bestMatch(parsed.pharmacyContact, ST.master.pharmacies, ['contact', 'trading', 'code'], 0.72)
+        : null;
+      if (!m) m = CB.bestMatch(parsed.pharmacyTrading || sn, ST.master.pharmacies, ['trading', 'contact', 'code'], 0.7);
+      ST.packages.push({
+        file: fname, name: sn, parsed: parsed,
+        pharmacy: m ? m.item : null,
+        matchedOn: m ? (parsed.pharmacyContact && CB.similarity(parsed.pharmacyContact, m.item.contact) >= 0.9
+          ? 'registered name' : 'trading name') : null,
+        use: true
+      });
+      return;
+    }
+
+    var hdr = CB.findHeaderRow(rows);
+    var body = rows.slice(hdr);
+    var pm = CB.bestMatch(sn, ST.master.pharmacies, ['trading', 'contact', 'code'], 0.7);
+    ST.sheets.push({
+      file: fname, name: sn, rows: body, headerRow: hdr,
+      map: CB.detectColumns(body, ST.master),
+      pharmFromName: pm ? pm.item : null,
+      use: true
+    });
+  });
+}
+
+/* ------------------------------------------------ package billing sheets */
+
+/* Seventy tabs is the normal case, so this leads with the totals and the
+ * exceptions. The per-sheet table is there to be scanned, not read. */
+function renderPackages() {
+  var host = $('#packages'); if (!host) return;
+  host.innerHTML = '';
+  if (!ST.packages.length) return;
+
+  var owners = ST.master.projects;
+  var chosen = ST.packageOwner || '';
+
+  var rowsOut = ST.packages.map(function (P) {
+    var x = CB.packageCrossCheck(P.parsed, ST.cfg);
+    var zero = !P.parsed.lines.length || !x.gross;
+    return { P: P, x: x, zero: zero };
+  });
+
+  var billable = rowsOut.filter(function (r) { return !r.zero && r.P.use; });
+  var zeroes = rowsOut.filter(function (r) { return r.zero; });
+  var unmatched = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy; });
+  var broken = rowsOut.filter(function (r) { return !r.zero && !r.x.ok; });
+  var noted = rowsOut.filter(function (r) { return !r.zero && r.x.notes.length; });
+  var giveaways = rowsOut.reduce(function (t, r) { return t + r.P.parsed.giveaways.length; }, 0);
+
+  var gross = CB.sumMoney(billable, function (r) { return r.x.gross; });
+  var invoice = CB.sumMoney(billable, function (r) { return r.x.invoiceTotal; });
+
+  var h = '<div class="card"><h2>Pharmacy billing sheets</h2>' +
+    '<div class="hint">One tab per pharmacy, one row per package sold. Each sheet states its own ' +
+    'Total Sales and Billing, and those are held against what this reads &mdash; a sheet whose figures ' +
+    'disagree is not billed.</div>' +
+
+    '<div class="row" style="margin-bottom:6px">' +
+    '<label class="mut">If a package is not mapped yet, treat it as</label>' +
+    '<select id="pkgOwner" onchange="setPackageOwner(this.value)" style="min-width:260px">' +
+    '<option value="">— leave unmapped, ask me on Review —</option>' +
+    owners.map(function (o) {
+      return '<option value="' + esc(o.code) + '"' + (o.code === chosen ? ' selected' : '') + '>' +
+        esc(o.name) + '</option>';
+    }).join('') + '</select>' +
+    (owners.length ? '' : '<span class="badge bad">add a brand owner on the Master data tab first</span>') +
+    '</div>' +
+    '<div class="hint" style="margin-bottom:14px">Each package is matched to its brand owner by name, so one ' +
+    'sheet may carry several brands and each invoice line is tagged with its own Xero tracking project. ' +
+    'Set a fallback only when the whole file is one brand &mdash; otherwise leave it blank and assign the ' +
+    'unmapped packages on the Review tab, where the answer is remembered for next month.</div>' +
+
+    '<div class="grid g3">' +
+    kpi('Sheets in the file', String(ST.packages.length)) +
+    kpi('To be billed', String(billable.length)) +
+    kpi('Gross sales', M(gross)) +
+    kpi('Invoice total', M(invoice), 'accent') +
+    kpi('Nothing sold', String(zeroes.length)) +
+    kpi('Need attention', String(unmatched.length + broken.length),
+      (unmatched.length + broken.length) ? 'accent' : '') +
+    '</div>';
+
+  if (broken.length) {
+    h += '<div class="note warn"><b>' + broken.length + ' sheet(s) do not agree with their own totals.</b> ' +
+      'Nothing from these is billed. Either the sheet was changed after it was totalled, or it is laid out ' +
+      'differently from the rest.' +
+      '<div class="scroll" style="max-height:200px;margin-top:9px"><table><tr><th>Sheet</th><th>Problem</th></tr>' +
+      broken.map(function (r) {
+        return '<tr><td>' + esc(r.P.name) + '</td><td>' + r.x.problems.map(esc).join('<br>') + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  if (unmatched.length) {
+    h += '<div class="note warn"><b>' + unmatched.length + ' sheet(s) are not in the pharmacy master.</b> ' +
+      'Add them on the Master data tab, with the registered name exactly as Xero has it.' +
+      '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
+      '<tr><th>Sheet</th><th>Registered name on the sheet</th><th class="num">Gross</th></tr>' +
+      unmatched.map(function (r) {
+        return '<tr><td>' + esc(r.P.name) + '</td><td>' + esc(r.P.parsed.pharmacyContact || '—') +
+          '</td><td class="num">' + M(r.x.gross) + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  if (giveaways) {
+    h += '<div class="note"><b>' + giveaways + ' giveaway row(s)</b> carry no price and are not billed. ' +
+      'The stock still left the shelf, so they are listed below rather than dropped.</div>';
+  }
+
+  if (noted.length) {
+    h += '<details><summary>' + noted.length + ' sheet(s) differ from their Billing cell by rounding</summary>' +
+      '<div class="scroll" style="max-height:200px;margin-top:8px"><table><tr><th>Sheet</th><th>Note</th></tr>' +
+      noted.map(function (r) {
+        return '<tr><td>' + esc(r.P.name) + '</td><td class="mut">' + esc(r.x.notes.join('; ')) + '</td></tr>';
+      }).join('') + '</table></div></details>';
+  }
+
+  h += '<div class="scroll" style="max-height:420px;margin-top:12px"><table>' +
+    '<tr><th></th><th>Sheet</th><th>Pharmacy</th><th class="num">Packages</th>' +
+    '<th class="num">Gross</th><th class="num">Invoice</th><th>Sheet says</th><th></th></tr>' +
+    rowsOut.map(function (r, i) {
+      var st = r.zero ? '<span class="badge">nothing sold</span>'
+        : !r.P.pharmacy ? '<span class="badge bad">no pharmacy</span>'
+          : !r.x.ok ? '<span class="badge bad">disagrees</span>'
+            : '<span class="badge ok">ok</span>';
+      return '<tr><td><input type="checkbox" ' + (r.P.use ? 'checked' : '') +
+        (r.zero || !r.P.pharmacy || !r.x.ok ? ' disabled' : '') +
+        ' onchange="ST.packages[' + i + '].use=this.checked;renderPackages()"></td>' +
+        '<td>' + esc(r.P.name) + '</td>' +
+        '<td>' + (r.P.pharmacy ? esc(r.P.pharmacy.trading) +
+          '<div class="mut">' + esc(r.P.pharmacy.contact) + '</div>' : '<span class="mut">—</span>') + '</td>' +
+        '<td class="num">' + r.P.parsed.lines.length + '</td>' +
+        '<td class="num">' + M(r.x.gross) + '</td>' +
+        '<td class="num">' + M(r.x.invoiceTotal) + '</td>' +
+        '<td class="num mut">' + (r.x.statedBilling != null ? M(r.x.statedBilling) : '—') + '</td>' +
+        '<td>' + st + '</td></tr>';
+    }).join('') + '</table></div>';
+
+  var ready = billable.length && !broken.length && !unmatched.length;
+  h += '<div class="row" style="margin-top:14px">' +
+    '<button class="btn" ' + (ready ? '' : 'disabled') + ' onclick="buildFromPackages()">' +
+    'Use these ' + billable.length + ' sheet(s) &rarr;</button>' +
+    (broken.length ? '<span class="mut">fix the disagreeing sheets first</span>'
+      : unmatched.length ? '<span class="mut">add the missing pharmacies first</span>'
+        : !billable.length ? '<span class="mut">nothing billable in this file</span>' : '') +
+    '</div></div>';
+
+  host.innerHTML = h;
+}
+
+function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* Each package becomes an invoice line: quantity counted, unit price kept, the
+ * discount applied by Xero. The brand owner rides on the line because in these
+ * files the brand is the file, not a per-product mapping. */
+function buildFromPackages() {
+  if (!requireWrite()) return;
+  var owner = ST.packageOwner || '';        // optional: only a fallback now
+
+  var raw = [], skipped = [];
+  ST.packages.forEach(function (P) {
+    var x = CB.packageCrossCheck(P.parsed, ST.cfg);
+    if (!P.use || !P.pharmacy || !x.ok || !x.gross) return;
+    CB.packageLines(P.parsed).forEach(function (l) {
+      raw.push({
+        _sheet: P.name, _row: 0,
+        pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
+        productRaw: l.pkg,
+        qty: l.qty, unitPrice: l.price, amount: null,
+        /* the package name decides the brand owner; `owner` only catches what is
+         * not mapped yet, and strictProduct keeps a near miss from deciding it */
+        projectCode: owner,
+        strictProduct: true
+      });
+    });
+    P.parsed.giveaways.forEach(function (g) {
+      skipped.push({ _sheet: P.name, _row: g.row, reason: 'giveaway' + (g.note ? ' — ' + g.note : ''), amount: 0 });
+    });
+  });
+
+  if (!raw.length) { toast('Nothing to bill from these sheets', 'bad'); return; }
+  ST.skipped = skipped;
+  recompute(raw);
+  toast(raw.length + ' package line(s) from ' + ST.packages.filter(function (P) { return P.use; }).length +
+    ' sheet(s)', 'ok');
+  go('review');
+}
+
+var ROLES = [
+  ['pharmacy', 'Pharmacy'], ['product', 'Product'], ['qty', 'Quantity'],
+  ['unitPrice', 'Unit price'], ['amount', 'Amount'], ['date', 'Date']
+];
+
+function renderSheets() {
+  renderPackages();
+  var host = $('#sheets'); host.innerHTML = '';
+  if (!ST.sheets.length) return;
+
+  var c = el('div', { class: 'card' });
+  c.appendChild(el('h2', null, 'Column mapping'));
+  c.appendChild(el('div', { class: 'hint' },
+    'Detected from the values in each column, not the header text. Correct anything that looks wrong &mdash; ' +
+    'a wrong mapping here is the one thing that silently produces confident, wrong invoices.'));
+
+  ST.sheets.forEach(function (S, si) {
+    var box = el('div', { class: 'card', style: 'background:var(--card2);margin-bottom:12px' });
+    var hdrRow = S.rows[0] || [];
+
+    var head = el('div', { class: 'row', style: 'margin-bottom:10px' });
+    head.innerHTML =
+      '<label class="row" style="gap:6px"><input type="checkbox" ' + (S.use ? 'checked' : '') + ' data-use="' + si + '">' +
+      '<b>' + esc(S.name) + '</b></label>' +
+      '<span class="mut">' + esc(S.file) + ' · ' + (S.rows.length - 1) + ' rows · header on row ' + (S.headerRow + 1) + '</span>' +
+      (S.pharmFromName ? '<span class="badge info">tab name → ' + esc(S.pharmFromName.trading) + '</span>' : '');
+    box.appendChild(head);
+
+    var g = el('div', { class: 'grid g3' });
+    ROLES.forEach(function (R) {
+      var d = el('div');
+      d.innerHTML = '<div class="mut" style="margin-bottom:3px">' + R[1] + '</div>';
+      var sel = el('select', { 'data-sheet': si, 'data-role': R[0], style: 'width:100%' });
+      sel.appendChild(el('option', { value: '' }, R[0] === 'pharmacy' && S.pharmFromName ? '— use tab name —' : '— none —'));
+      hdrRow.forEach(function (h, i) {
+        var o = el('option', { value: String(i) }, esc(String(h || '(col ' + (i + 1) + ')')).slice(0, 40) +
+          ' &nbsp;<span>' + esc(String((S.rows[1] || [])[i] == null ? '' : (S.rows[1] || [])[i]).slice(0, 18)) + '</span>');
+        if (S.map[R[0]] === i) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = function () { S.map[R[0]] = this.value === '' ? null : +this.value; };
+      d.appendChild(sel);
+      g.appendChild(d);
+    });
+    box.appendChild(g);
+
+    var prev = el('details');
+    prev.appendChild(el('summary', null, 'Preview the first rows'));
+    var t = '<div class="scroll" style="max-height:220px"><table><tr>' +
+      hdrRow.map(function (h) { return '<th>' + esc(String(h || '')) + '</th>'; }).join('') + '</tr>' +
+      S.rows.slice(1, 7).map(function (r) {
+        return '<tr>' + hdrRow.map(function (_, i) {
+          return '<td>' + esc(String(r[i] == null ? '' : (r[i] instanceof Date ? r[i].toISOString().slice(0, 10) : r[i]))).slice(0, 40) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</table></div>';
+    prev.appendChild(el('div', null, t));
+    box.appendChild(prev);
+
+    c.appendChild(box);
+  });
+
+  c.querySelectorAll('[data-use]').forEach(function (cb) {
+    cb.onchange = function () { ST.sheets[+this.dataset.use].use = this.checked; };
+  });
+
+  var act = el('div', { class: 'row', style: 'margin-top:6px' });
+  var b = el('button', { class: 'btn' }, 'Apply mapping and continue &rarr;');
+  b.onclick = buildLines;
+  act.appendChild(b);
+  c.appendChild(act);
+  host.appendChild(c);
+}
+
+function buildLines() {
+  var raw = [], skipped = [];
+  ST.sheets.forEach(function (S) {
+    if (!S.use) return;
+    if (S.map.product == null) { toast('Sheet "' + S.name + '" has no product column mapped — skipped', 'bad'); return; }
+    if (S.map.pharmacy == null && !S.pharmFromName) { toast('Sheet "' + S.name + '" has no pharmacy — skipped', 'bad'); return; }
+    var x = CB.extractRows(S);
+    raw = raw.concat(x.raw); skipped = skipped.concat(x.skipped);
+  });
+  if (!raw.length) { toast('No usable rows found', 'bad'); return; }
+  ST.skipped = skipped;
+  recompute(raw);
+  toast(raw.length + ' rows loaded' + (skipped.length ? ', ' + skipped.length + ' total/blank row(s) skipped' : ''), 'ok');
+  go('review');
+}
+
+var RAW = [];
+function recompute(raw) {
+  if (raw) RAW = raw;
+  ST.lines = CB.resolveLines(RAW, ST.master, ST.cfg);
+  ST.settlement = CB.buildSettlement(ST.lines, ST.cfg);
+  // Same predicate on both sides — see CB.isBillable. Never filter here.
+  ST.billing = CB.buildPharmacyBilling(ST.lines, ST.cfg);
+  ST.check = CB.crossCheck(ST.billing, ST.settlement);
+  renderSteps();
+}
+
+/* ============================================================= REVIEW */
+function renderReview() {
+  var host = $('#reviewBody');
+  if (!ST.lines.length) { host.innerHTML = '<div class="card"><div class="hint">Import a file first.</div></div>'; return; }
+
+  var bad = ST.lines.filter(function (l) { return l.issues.length; });
+  var noProd = {}, noPharm = {};
+  bad.forEach(function (l) {
+    if (!l.project && l.productRaw) (noProd[l.productRaw] = noProd[l.productRaw] || []).push(l);
+    if (!l.pharmacy && l.pharmacyRaw) (noPharm[l.pharmacyRaw] = noPharm[l.pharmacyRaw] || []).push(l);
+  });
+  var pk = Object.keys(noProd), hk = Object.keys(noPharm);
+
+  var h = '';
+  h += '<div class="card"><div class="row">' +
+    chip(ST.lines.length + ' rows', '') +
+    chip(CB.money(CB.sumMoney(ST.lines, function (l) { return l.gross; })) + ' gross', '') +
+    chip(bad.length + ' need attention', bad.length ? 'bad' : 'ok') +
+    chip(pk.length + ' unmapped product(s)', pk.length ? 'warn' : 'ok') +
+    chip(hk.length + ' unknown pharmacy(s)', hk.length ? 'warn' : 'ok') +
+    '</div></div>';
+
+  if (ST.skipped && ST.skipped.length) {
+    h += '<div class="card"><h2>Rows skipped as totals or blanks</h2>' +
+      '<div class="hint">These carried an amount but no product, so they read as sheet totals rather than sales. ' +
+      'Ingesting a TOTAL row would double that sheet. If any of these is a real sale, fix the product column mapping on the Import tab.</div>' +
+      '<div class="scroll" style="max-height:220px"><table><tr><th>Sheet</th><th>Row</th><th>Reason</th><th class="num">Amount on the row</th></tr>' +
+      ST.skipped.map(function (s) {
+        return '<tr><td>' + esc(s._sheet) + '</td><td class="mono">' + s._row + '</td>' +
+          '<td><span class="badge info">' + esc(s.reason) + '</span></td><td class="num">' + M(s.amount) + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  if (!ST.master.projects.length) {
+    h += '<div class="card"><div class="note warn"><b>No brand owners yet.</b> Add them under <b>Master data</b> first &mdash; ' +
+      'a sale cannot be settled until the system knows whose goods it was.</div>' +
+      '<button class="btn sm" onclick="go(\'master\')">Go to Master data</button></div>';
+  }
+
+  if (pk.length) {
+    h += '<div class="card"><h2>Assign products to a brand owner</h2>' +
+      '<div class="hint">Assign once &mdash; the name is remembered as an alias, so next month it resolves by itself. ' +
+      'Nothing can be finalised while any of these is unassigned: an unattributed row would drop out of the ' +
+      'invoices and the settlement together, which balances perfectly and loses the money.</div>' +
+      '<div class="scroll"><table><tr><th>Product on the file</th><th class="num">Rows</th><th class="num">Gross</th><th>Brand owner</th></tr>' +
+      pk.map(function (p) {
+        var ls = noProd[p];
+        /* A near match is shown pre-selected but is NOT applied until it is saved
+         * here: MIZINO PREMIUM, MIZINO PLACENTA and MIZINO ENZYME belong to three
+         * different companies, so a resemblance is a prompt, never an answer. */
+        var sug = ls[0].productSuggestion || null;
+        var sugCode = sug ? sug.project : '';
+        return '<tr><td><b>' + esc(p) + '</b><div class="mut">' + esc(ls[0]._sheet) + ' row ' + ls[0]._row +
+          (sug ? ' &middot; closest known package: <b>' + esc(sug.name) + '</b> &mdash; check it is the same brand' : '') +
+          '</div></td>' +
+          '<td class="num">' + ls.length + '</td>' +
+          '<td class="num">' + M(CB.sumMoney(ls, function (l) { return l.gross; })) + '</td>' +
+          '<td>' + projectSelect('mapProduct(this,' + JSON.stringify(p).replace(/"/g, '&quot;') + ')', sugCode) +
+          (sug ? '<div class="mut">suggested &mdash; not applied until you save it</div>' : '') +
+          '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  if (hk.length) {
+    h += '<div class="card"><h2>Unknown pharmacies</h2>' +
+      '<div class="hint">Point each one at the master record. The spelling on the file is kept as an alias.</div>' +
+      '<div class="scroll"><table><tr><th>Name on the file</th><th class="num">Rows</th><th class="num">Gross</th><th>Master pharmacy</th></tr>' +
+      hk.map(function (p) {
+        var ls = noPharm[p];
+        return '<tr><td><b>' + esc(p) + '</b><div class="mut">' + esc(ls[0]._sheet) + '</div></td>' +
+          '<td class="num">' + ls.length + '</td>' +
+          '<td class="num">' + M(CB.sumMoney(ls, function (l) { return l.gross; })) + '</td>' +
+          '<td><select onchange="mapPharmacy(this,' + JSON.stringify(p).replace(/"/g, '&quot;') + ')"><option value="">— choose —</option>' +
+          ST.master.pharmacies.map(function (m) {
+            return '<option value="' + esc(m.code) + '">' + esc(m.trading) + ' (' + esc(m.code) + ')</option>';
+          }).join('') + '</select></td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  var other = bad.filter(function (l) { return l.project && l.pharmacy; });
+  if (other.length) {
+    h += '<div class="card"><h2>Other row problems</h2>' +
+      '<div class="scroll"><table><tr><th>Sheet</th><th>Row</th><th>Pharmacy</th><th>Product</th><th class="num">Gross</th><th>Issue</th></tr>' +
+      other.slice(0, 300).map(function (l) {
+        return '<tr><td>' + esc(l._sheet) + '</td><td class="mono">' + l._row + '</td><td>' + esc(l.pharmacyRaw) +
+          '</td><td>' + esc(l.productRaw) + '</td><td class="num">' + M(l.gross) + '</td>' +
+          '<td><span class="badge warn">' + esc(l.issues.join('; ')) + '</span></td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  h += '<div class="card"><h2>All rows</h2><div class="scroll"><table>' +
+    '<tr><th>Sheet</th><th>Row</th><th>Pharmacy</th><th>Product</th><th>Brand owner</th>' +
+    '<th class="num">Qty</th><th class="num">Price</th><th class="num">Gross</th><th class="num">Disc 19.2%</th><th class="num">Net</th></tr>' +
+    ST.lines.slice(0, 800).map(function (l) {
+      return '<tr><td>' + esc(l._sheet) + '</td><td class="mono">' + l._row + '</td>' +
+        '<td>' + (l.pharmacy ? esc(l.pharmacy.trading) : '<span class="badge bad">' + esc(l.pharmacyRaw || '(blank)') + '</span>') + '</td>' +
+        '<td>' + esc(l.productRaw) + '</td>' +
+        '<td>' + (l.project ? esc(l.project.name) : '<span class="badge bad">unmapped</span>') + '</td>' +
+        '<td class="num">' + l.qty + '</td><td class="num">' + M(l.unitPrice) + '</td>' +
+        '<td class="num">' + M(l.gross) + '</td><td class="num">' + M(l.discount) + '</td><td class="num">' + M(l.net) + '</td></tr>';
+    }).join('') + '</table></div>' +
+    (ST.lines.length > 800 ? '<div class="hint" style="margin-top:8px">Showing first 800 of ' + ST.lines.length + ' rows.</div>' : '') +
+    '<div class="row" style="margin-top:12px"><button class="btn" onclick="go(\'settle\')">Continue to settlement →</button></div></div>';
+
+  host.innerHTML = h;
+}
+
+function chip(t, c) { return '<span class="chip ' + c + '"><b>' + esc(t) + '</b></span>'; }
+
+function projectSelect(onch, preselect) {
+  return '<select onchange="' + onch + '"><option value="">— choose —</option>' +
+    ST.master.projects.map(function (p) {
+      return '<option value="' + esc(p.code) + '"' + (p.code === preselect ? ' selected' : '') + '>' +
+        esc(p.name) + '</option>';
+    }).join('') + '</select>';
+}
+
+function mapProduct(sel, rawName) {
+  if (!sel.value) return;
+  var existing = ST.master.products.filter(function (p) {
+    return CB.normKey(p.name) === CB.normKey(rawName) || (p.aliases || []).some(function (a) { return CB.normKey(a) === CB.normKey(rawName); });
+  })[0];
+  if (existing) { existing.project = sel.value; }
+  else ST.master.products.push({ sku: '', name: rawName, project: sel.value, price: '', aliases: [rawName] });
+  save(); recompute(); renderReview();
+  toast('"' + rawName + '" mapped — remembered for next month', 'ok');
+}
+
+function mapPharmacy(sel, rawName) {
+  if (!sel.value) return;
+  var p = ST.master.pharmacies.filter(function (x) { return x.code === sel.value; })[0];
+  if (!p) return;
+  p.aliases = p.aliases || [];
+  if (p.aliases.indexOf(rawName) < 0) p.aliases.push(rawName);
+  save(); recompute(); renderReview();
+  toast('"' + rawName + '" → ' + p.trading + ' — remembered', 'ok');
+}
+
+/* ========================================================= SETTLEMENT */
+function renderSettle() {
+  var host = $('#settleBody');
+  if (!ST.settlement || !ST.settlement.projects.length) {
+    host.innerHTML = '<div class="card"><div class="hint">Nothing to settle yet — import a file and map the products.</div></div>';
+    return;
+  }
+  var S = ST.settlement, c = ST.cfg;
+  var g = {
+    sales: CB.sumMoney(S.projects, function (p) { return p.salesAmount; }),
+    net: CB.sumMoney(S.projects, function (p) { return p.netSales; }),
+    mgmt: CB.sumMoney(S.projects, function (p) { return p.mgmtFee; }),
+    svc: CB.sumMoney(S.projects, function (p) { return p.serviceFee; }),
+    sst: CB.sumMoney(S.projects, function (p) { return p.sst; }),
+    pay: CB.sumMoney(S.projects, function (p) { return p.totalPayout; })
+  };
+
+  var h = '<div class="card"><h2>' + esc(CB.periodLabel(c.period)) + ' &mdash; group totals</h2>' +
+    '<div class="grid g3" style="margin-top:12px">' +
+    kpi('Sales amount', M(g.sales)) +
+    kpi('Net sales after ' + c.discountPct + '%', M(g.net)) +
+    kpi('CTG4U fee income', M(CB.r2(g.mgmt + g.svc)), 'accent') +
+    kpi('SST 8% collected', M(g.sst)) +
+    kpi('Payable to brand owners', M(g.pay)) +
+    kpi('Brand owners / pharmacies', S.projects.length + ' / ' + ST.billing.length) +
+    '</div>';
+  if (S.unmapped.length) {
+    h += '<div class="note warn"><b>' + S.unmapped.length + ' row(s) excluded</b> because the pharmacy or the brand owner ' +
+      'could not be identified (gross ' + M(CB.sumMoney(S.unmapped, function (l) { return l.gross; })) +
+      '). They are in <b>neither</b> the pharmacy invoices nor the statements below. Fix them on the Review tab.</div>';
+  }
+  h += ckBanner();
+  h += '</div>';
+
+  S.projects.forEach(function (P, i) {
+    h += '<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start">' +
+      '<div><h2>' + esc(P.project.name) + '</h2><div class="mut">' + esc(P.code) + ' · ' +
+      P.pharmacyCount + ' pharmacy(s) · ' + P.lines.length + ' line(s)</div></div>' +
+      '<button class="btn sm ghost" onclick="printStatement(' + i + ')">🖨 Statement</button></div>' +
+
+      '<div class="grid g2" style="margin-top:14px">' +
+      '<div><table class="recon">' +
+      rr('Sales Amount', M(P.salesAmount)) +
+      rr('Less: Discount ' + c.discountPct + '%', '(' + M(P.discount) + ')', 'neg') +
+      rr('<b>Net Sales</b>', '<b>' + M(P.netSales) + '</b>', '', 'sub') +
+      rr('Less: Pharmacy Management Fee (' + P.pharmacyCount + ' × ' + M(c.mgmtFeePerPharmacy) + ')', '(' + M(P.mgmtFee) + ')', 'neg') +
+      rr('Less: Service Fee ' + c.serviceFeePct + '% of Sales Amount', '(' + M(P.serviceFee) + ')', 'neg') +
+      rr('Less: SST ' + c.sstPct + '% on fees', '(' + M(P.sst) + ')', 'neg') +
+      rr('TOTAL PAYOUT', M(P.totalPayout), '', 'tot') +
+      '</table></div>' +
+
+      '<div class="scroll" style="max-height:280px"><table><tr><th>Pharmacy</th><th class="num">Sales</th>' +
+      '<th class="num">Disc</th><th class="num">Net</th><th class="num">Mgmt fee</th></tr>' +
+      P.byPharmacy.map(function (B) {
+        return '<tr><td>' + esc(B.pharmacy.trading) + '<div class="mut">' + esc(B.pharmacy.code) + '</div></td>' +
+          '<td class="num">' + M(B.gross) + '</td><td class="num">' + M(B.discount) + '</td>' +
+          '<td class="num">' + M(B.net) + '</td><td class="num">' + M(B.mgmtFee) + '</td></tr>';
+      }).join('') +
+      '<tr><td><b>Total</b></td><td class="num"><b>' + M(P.salesAmount) + '</b></td><td class="num"><b>' + M(P.discount) +
+      '</b></td><td class="num"><b>' + M(P.netSales) + '</b></td><td class="num"><b>' + M(P.mgmtFee) + '</b></td></tr>' +
+      '</table></div></div></div>';
+  });
+
+  host.innerHTML = h;
+}
+/* The control that has to be visible on screen, not buried in a log: the money
+ * invoiced to pharmacies and the money owed to brand owners are the same money. */
+function ckBanner() {
+  var k = ST.check; if (!k) return '';
+  if (k.ok) {
+    return '<div class="note" style="border-color:var(--ok);background:#00a99d0f">✓ <b>Reconciled.</b> ' +
+      'Invoiced to pharmacies ' + M(k.billed) + ' = owed to brand owners ' + M(k.owed) + '.' +
+      (k.excludedRows ? ' (' + k.excludedRows + ' unresolved row(s) worth ' + M(k.excludedGross) + ' gross are outside both.)' : '') +
+      '</div>';
+  }
+  return '<div class="note warn" style="border-color:var(--bad);background:#d645450d">⚠ <b>OUT OF BALANCE by ' + M(k.diff) + '.</b> ' +
+    'Invoiced to pharmacies ' + M(k.billed) + ' vs owed to brand owners ' + M(k.owed) + '. ' +
+    'Do not import any of these files into Xero &mdash; this is money with no owner. Report it.' +
+    '</div>';
+}
+
+function kpi(l, v, cls) { return '<div class="kpi ' + (cls || '') + '"><div class="l">' + l + '</div><div class="v">' + v + '</div></div>'; }
+function rr(l, v, vc, rc) {
+  return '<tr class="' + (rc || '') + '"><td>' + l + '</td><td class="num ' + (vc || '') + '">' + v + '</td></tr>';
+}
+
+/* ============================================================= OUTPUT */
+function renderOut() {
+  var host = $('#outBody');
+  if (!ST.settlement || !ST.settlement.projects.length) {
+    host.innerHTML = '<div class="card"><div class="hint">Nothing to export yet.</div></div>'; return;
+  }
+  var c = ST.cfg, S = ST.settlement;
+  var pharmT = CB.xeroPharmacyInvoices(ST.billing, c);
+  var svcT = CB.xeroServiceInvoices(S, c);
+  var billT = CB.xeroPayoutBills(S, c);
+
+  var t = CB.sumMoney(S.projects, function (p) { return p.totalPayout; });
+  host.innerHTML =
+    '<div class="card">' + ckBanner() + '</div>' +
+    '<div class="card"><h2>Finalise this month</h2>' +
+    '<div class="hint">Until you finalise, these are draft figures and the invoice numbers below are only a preview.' +
+    ' Finalising reserves the real numbers from the shared database, stores the run, and closes ' +
+    esc(CB.periodLabel(c.period)) + ' so nobody can bill it twice.</div>' +
+    '<div class="row">' +
+    (CAN_WRITE
+      ? '<button class="btn" onclick="finaliseRun()">🔒 Finalise &amp; issue document numbers</button>'
+      : '<span class="mut">Your account has read-only access.</span>') +
+    '<span class="mut">' + ST.billing.length + ' pharmacy invoices · ' + S.projects.length +
+    ' brand owners · payout ' + M(t) + '</span></div>' +
+    '<div id="finaliseState" class="mut" style="margin-top:8px">Checking this period…</div></div>' +
+
+    '<div class="card"><h2>Send to Xero</h2>' +
+    '<div class="hint">Creates every document of a finalised run in Xero as a <b>draft</b>, ready for you ' +
+    'to review and approve there. Documents already created are skipped, so pressing this twice is harmless.</div>' +
+    '<div id="xeroPost"><span class="mut">Finalise the month first.</span></div></div>' +
+    '<div class="card"><h2>Xero imports</h2>' +
+    '<div class="hint">Xero &rsaquo; Business &rsaquo; Invoices / Bills &rsaquo; Import. Everything lands as <b>DRAFT</b> — approve in Xero after checking.</div>' +
+
+    '<div class="grid g3" style="margin-top:6px">' +
+    outCard('A · Pharmacy invoices', 'ACCREC · ' + ST.billing.length + ' invoices · ' + pharmT.rows.length + ' lines',
+      M(CB.sumMoney(ST.billing, function (b) { return b.net; })),
+      'Coded to ' + c.acctPassThrough + ' (pass-through liability). Unit price is the full price with a ' +
+      c.discountPct + '% discount column, so the pharmacy sees the discount on the invoice.', 'dlPharm()') +
+    outCard('B · Brand owner fee invoices', 'ACCREC · ' + S.projects.length + ' invoices',
+      M(CB.r2(CB.sumMoney(S.projects, function (p) { return p.mgmtFee + p.serviceFee; }) + CB.sumMoney(S.projects, function (p) { return p.sst; }))),
+      'CTG4U revenue: management fee → ' + c.acctMgmtIncome + ', service fee → ' + c.acctServiceIncome +
+      ', both at ' + esc(c.taxTypeSST) + '.', 'dlSvc()') +
+    outCard('C · Brand owner payout bills', 'ACCPAY · ' + S.projects.length + ' bills · ' + billT.rows.length + ' lines',
+      M(CB.sumMoney(S.projects, function (p) { return p.netSales; })),
+      'Raised at <b>net sales</b>, not at the payout figure — the fees in (B) offset it. Cash to remit = C − B.', 'dlBill()') +
+    '</div>' +
+
+    '<div class="note"><b>How the three documents settle.</b> ' +
+    'Bill (C) ' + M(CB.sumMoney(S.projects, function (p) { return p.netSales; })) + ' &minus; fee invoice (B) ' +
+    M(CB.r2(CB.sumMoney(S.projects, function (p) { return p.mgmtFee + p.serviceFee; }) + CB.sumMoney(S.projects, function (p) { return p.sst; }))) +
+    ' = <b>' + M(CB.sumMoney(S.projects, function (p) { return p.totalPayout; })) + '</b> actually paid out. ' +
+    'In Xero, offset the two against the same contact rather than paying the bill in full.</div>' +
+    '</div>' +
+
+    '<div class="card"><h2>Brand owner statements</h2>' +
+    '<div class="hint">Opens a clean print view — use the browser&rsquo;s Print &rsaquo; Save as PDF.</div>' +
+    '<div class="row">' +
+    S.projects.map(function (P, i) {
+      return '<button class="btn sm ghost" onclick="printStatement(' + i + ')">🖨 ' + esc(P.project.name) + '</button>';
+    }).join('') +
+    '<button class="btn sm" onclick="printStatement(-1)">🖨 All statements</button>' +
+    '</div></div>' +
+
+    '<div class="card"><h2>Working file</h2>' +
+    '<div class="hint">Every line, every calculation, every Xero row in one workbook — this is what you keep for the audit trail.</div>' +
+    '<button class="btn" onclick="dlWorkbook()">⬇ Full report (xlsx)</button></div>';
+  checkPeriodState();
+  renderXeroPost();
+}
+
+/* Asked every time the Outputs tab is drawn, because another person may have
+ * finalised this period since the figures on screen were built. */
+function checkPeriodState() {
+  var host = $('#finaliseState'); if (!host) return;
+  DB.periodStatus(ST.cfg.period).then(function (st) {
+    if (!$('#finaliseState')) return;
+    if (st.finalised) {
+      $('#finaliseState').innerHTML = '<span class="badge bad">already finalised</span> ' +
+        CB.periodLabel(ST.cfg.period) + ' has a final run. Void it on the History tab before redoing it.';
+    } else if (st.documentCount) {
+      $('#finaliseState').innerHTML = '<span class="badge warn">' + st.documentCount +
+        ' document number(s) already issued</span> for this period. New numbers will continue after them.';
+    } else {
+      $('#finaliseState').innerHTML = 'No documents issued for ' + CB.periodLabel(ST.cfg.period) + ' yet.';
+    }
+  }, function () { $('#finaliseState').textContent = ''; });
+}
+
+function outCard(t, sub, amt, note, fn) {
+  return '<div class="kpi"><div class="l">' + t + '</div>' +
+    '<div class="v" style="font-size:18px">' + amt + '</div>' +
+    '<div class="mut" style="margin:4px 0 8px">' + sub + '</div>' +
+    '<div class="mut" style="margin-bottom:10px">' + note + '</div>' +
+    '<button class="btn sm" onclick="' + fn + '">⬇ CSV</button></div>';
+}
+
+function fname(kind, ext) {
+  return 'CTG4U_' + kind + '_' + CB.periodYYMM(ST.cfg.period) + '.' + ext;
+}
+function dlPharm() { dl(fname('Pharmacy_Invoices', 'csv'), CB.toCSV(CB.xeroPharmacyInvoices(ST.billing, ST.cfg))); }
+function dlSvc() { dl(fname('BrandOwner_Fee_Invoices', 'csv'), CB.toCSV(CB.xeroServiceInvoices(ST.settlement, ST.cfg))); }
+function dlBill() { dl(fname('BrandOwner_Payout_Bills', 'csv'), CB.toCSV(CB.xeroPayoutBills(ST.settlement, ST.cfg))); }
+
+/* ---------------------------------------------------------- statement */
+function printStatement(idx) {
+  var S = ST.settlement; if (!S) return;
+  var one = idx >= 0 ? { projects: [S.projects[idx]], unmapped: S.unmapped } : S;
+  // Numbering is stamped from the FULL settlement first, so a single-brand-owner
+  // print quotes the same document numbers as the CSVs, not a fresh 0001.
+  CB.xeroServiceInvoices(S, ST.cfg); CB.xeroPayoutBills(S, ST.cfg);
+  var w = window.open('', '_blank');
+  if (!w) { toast('Pop-up blocked — allow pop-ups for this page, then try again', 'bad'); return; }
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Consignment Settlement ' +
+    esc(CB.periodLabel(ST.cfg.period)) + '</title><style>' + CB.STMT_CSS + '</style></head><body>' +
+    one.projects.map(function (P) { return CB.statementHTML(P, ST.cfg); }).join('') + '</body></html>');
+  w.document.close();
+  setTimeout(function () { w.focus(); w.print(); }, 350);
+}
+
+/* --------------------------------------------------------- workbook */
+function dlWorkbook() {
+  var c = ST.cfg, S = ST.settlement;
+  var wb = XLSX.utils.book_new();
+  var add = function (name, aoa) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name.slice(0, 31)); };
+
+  add('Summary', [['CTG4U RETAIL SDN BHD — Consignment settlement'], ['Period', CB.periodLabel(c.period)], [],
+    ['Brand owner', 'Pharmacies', 'Sales Amount', 'Discount ' + c.discountPct + '%', 'Net Sales',
+      'Mgmt Fee', 'Service Fee ' + c.serviceFeePct + '%', 'SST ' + c.sstPct + '%', 'Total Payout',
+      'Fee invoice', 'Payout bill']]
+    .concat(S.projects.map(function (P) {
+      return [P.project.name, P.pharmacyCount, P.salesAmount, P.discount, P.netSales,
+        P.mgmtFee, P.serviceFee, P.sst, P.totalPayout, P.serviceInvoiceNumber || '', P.payoutBillNumber || ''];
+    }))
+    .concat([['TOTAL', '', CB.sumMoney(S.projects, function (p) { return p.salesAmount; }),
+      CB.sumMoney(S.projects, function (p) { return p.discount; }), CB.sumMoney(S.projects, function (p) { return p.netSales; }),
+      CB.sumMoney(S.projects, function (p) { return p.mgmtFee; }), CB.sumMoney(S.projects, function (p) { return p.serviceFee; }),
+      CB.sumMoney(S.projects, function (p) { return p.sst; }), CB.sumMoney(S.projects, function (p) { return p.totalPayout; })]]));
+
+  add('By pharmacy', [['Brand owner', 'Pharmacy code', 'Pharmacy', 'Sales Amount', 'Discount', 'Net Sales', 'Mgmt Fee']]
+    .concat(S.projects.reduce(function (a, P) {
+      return a.concat(P.byPharmacy.map(function (B) {
+        return [P.project.name, B.pharmacy.code, B.pharmacy.trading, B.gross, B.discount, B.net, B.mgmtFee];
+      }));
+    }, [])));
+
+  add('All lines', [['Sheet', 'Row', 'Pharmacy (file)', 'Pharmacy (master)', 'Product', 'Brand owner',
+    'Qty', 'Unit price', 'Sales Amount', 'Discount', 'Net', 'Issues']]
+    .concat(ST.lines.map(function (l) {
+      return [l._sheet, l._row, l.pharmacyRaw, l.pharmacy ? l.pharmacy.trading : '', l.productRaw,
+      l.project ? l.project.name : '', l.qty, l.unitPrice, l.gross, l.discount, l.net, l.issues.join('; ')];
+    })));
+
+  [['Xero A Pharmacy Inv', CB.xeroPharmacyInvoices(ST.billing, c)],
+  ['Xero B Fee Inv', CB.xeroServiceInvoices(S, c)],
+  ['Xero C Payout Bills', CB.xeroPayoutBills(S, c)]].forEach(function (p) {
+    add(p[0], [p[1].columns].concat(p[1].rows.map(function (r) {
+      return p[1].columns.map(function (k) { return r[k]; });
+    })));
+  });
+
+  add('Settings', [['Setting', 'Value']].concat(Object.keys(CB.DEFAULTS).map(function (k) { return [k, c[k]]; })));
+
+  XLSX.writeFile(wb, fname('Consignment_Report', 'xlsx'));
+}
+
+/* ============================================================ MASTER */
+function renderProjects() {
+  var t = $('#tblProjects');
+  t.innerHTML = '<tr><th>Code</th><th>Brand owner name</th><th>Xero contact (must match Xero)</th><th>Email</th><th></th></tr>' +
+    ST.master.projects.map(function (p, i) {
+      return '<tr>' +
+        ed('projects', i, 'code', p.code, 'BO-001') + ed('projects', i, 'name', p.name, 'Legal name') +
+        ed('projects', i, 'xeroContact', p.xeroContact, 'exact Xero contact') + ed('projects', i, 'email', p.email, '') +
+        '<td><button class="btn sm danger" title="Remove" onclick="delRow(\'projects\',' + i + ')">✕</button></td></tr>';
+    }).join('');
+}
+function renderProducts() {
+  var q = CB.normKey($('#prodSearch') ? $('#prodSearch').value : '');
+  var t = $('#tblProducts');
+  var opts = ST.master.projects.map(function (p) { return { v: p.code, l: p.name }; });
+  var rows = ST.master.products.map(function (p, i) { return { p: p, i: i }; })
+    .filter(function (x) { return !q || CB.normKey(x.p.name + ' ' + x.p.sku + ' ' + (x.p.aliases || []).join(' ')).indexOf(q) >= 0; });
+  t.innerHTML = '<tr><th>SKU</th><th>Product name</th><th>Brand owner</th><th>Aliases seen on files</th><th></th></tr>' +
+    rows.slice(0, 400).map(function (x) {
+      return '<tr>' + ed('products', x.i, 'sku', x.p.sku, '') + ed('products', x.i, 'name', x.p.name, '') +
+        '<td><select onchange="setCell(\'products\',' + x.i + ',\'project\',this.value)"><option value="">—</option>' +
+        opts.map(function (o) { return '<option value="' + esc(o.v) + '"' + (o.v === x.p.project ? ' selected' : '') + '>' + esc(o.l) + '</option>'; }).join('') +
+        '</select></td>' +
+        '<td class="mut">' + esc((x.p.aliases || []).join(' · ')) + '</td>' +
+        '<td><button class="btn sm danger" title="Remove" onclick="delRow(\'products\',' + x.i + ')">✕</button></td></tr>';
+    }).join('') +
+    (rows.length > 400 ? '<tr><td colspan="5" class="mut">Showing 400 of ' + rows.length + '</td></tr>' : '');
+}
+function renderPharmacies() {
+  var q = CB.normKey($('#pharmSearch') ? $('#pharmSearch').value : '');
+  var rows = ST.master.pharmacies.map(function (p, i) { return { p: p, i: i }; })
+    .filter(function (x) { return !q || CB.normKey(x.p.trading + ' ' + x.p.contact + ' ' + x.p.code).indexOf(q) >= 0; });
+  $('#tblPharm').innerHTML = '<tr><th>Code</th><th>Trading name</th><th>Xero contact</th><th>Email</th><th>Aliases</th><th></th></tr>' +
+    rows.map(function (x) {
+      return '<tr>' + ed('pharmacies', x.i, 'code', x.p.code, '') + ed('pharmacies', x.i, 'trading', x.p.trading, '') +
+        ed('pharmacies', x.i, 'contact', x.p.contact, '') + ed('pharmacies', x.i, 'email', x.p.email, '') +
+        '<td class="mut">' + esc((x.p.aliases || []).join(' · ')) + '</td>' +
+        '<td><button class="btn sm danger" title="Deactivate" onclick="delRow(\'pharmacies\',' + x.i + ')">✕</button></td></tr>';
+    }).join('');
+}
+function ed(list, i, k, v, ph) {
+  return '<td><input type="text" value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') +
+    '" style="width:100%" onchange="setCell(\'' + list + '\',' + i + ',\'' + k + '\',this.value)"></td>';
+}
+function setCell(list, i, k, v) {
+  if (!requireWrite()) return;
+  var row = ST.master[list][i];
+  var was = row[k];
+  row[k] = v;
+  persistRow(list, row).then(function (saved) {
+    if (saved && saved.id) row.id = saved.id;
+    recompute();
+  }, function (e) {
+    row[k] = was;                              // put the screen back to the truth
+    toast('Not saved: ' + e.message, 'bad');
+    renderProjects(); renderProducts(); renderPharmacies();
+  });
+}
+
+/* Pharmacies are deactivated rather than deleted: past runs reference them and
+ * the history has to stay explainable. */
+function delRow(list, i) {
+  if (!requireWrite()) return;
+  var row = ST.master[list][i];
+  var word = list === 'pharmacies' ? 'Deactivate this pharmacy?' : 'Delete this row?';
+  if (!confirm(word)) return;
+  if (!row.id) { ST.master[list].splice(i, 1); renderProjects(); renderProducts(); renderPharmacies(); return; }
+  deleteRow(list, row).then(refreshMaster, function (e) {
+    toast(e.message.indexOf('foreign key') >= 0
+      ? 'Still used by products or past runs, so it cannot be removed'
+      : 'Not removed: ' + e.message, 'bad');
+  });
+}
+
+function addProject() {
+  if (!requireWrite()) return;
+  var n = ST.master.projects.length + 1;
+  var code = 'BO-' + String(n).padStart(3, '0');
+  while (ST.master.projects.some(function (p) { return p.code === code; })) {
+    n++; code = 'BO-' + String(n).padStart(3, '0');
+  }
+  DB.saveBrandOwner({ code: code, name: 'New brand owner', xeroContact: '', email: '' })
+    .then(refreshMaster).then(function () { go('master'); }, err);
+}
+/* A product row has nowhere to live until it names a brand owner, so it is held
+ * in memory and written on the first edit that completes it. */
+function addProduct() {
+  if (!requireWrite()) return;
+  ST.master.products.unshift({ sku: '', name: '', project: '', aliases: [] });
+  renderProducts();
+}
+function addPharmacy() {
+  if (!requireWrite()) return;
+  ST.master.pharmacies.unshift({ code: '', trading: '', contact: '', email: '', aliases: [] });
+  renderPharmacies();
+}
+
+function requireWrite() {
+  if (CAN_WRITE) return true;
+  toast('Your account has read-only access', 'bad');
+  return false;
+}
+function err(e) { toast(e.message || String(e), 'bad'); }
+
+/* ------------------------------------------------ Xero contact list */
+$('#fileXeroContacts').onchange = function (e) {
+  var f = e.target.files[0]; if (!f) return;
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var wb = XLSX.read(new Uint8Array(r.result), { type: 'array' });
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, blankrows: false, defval: '', raw: false });
+      var list = CB.parseXeroContacts(rows);
+      if (!list.length) { toast('No contacts found in that file — is it the Xero contact export?', 'bad'); return; }
+      ST.xeroContacts = list;
+      toast(list.length + ' Xero contacts loaded', 'ok');
+      renderXeroContacts();
+    } catch (err) { toast('Could not read that file: ' + err.message, 'bad'); }
+  };
+  r.readAsArrayBuffer(f);
+  e.target.value = '';
+};
+
+function renderXeroContacts() {
+  var list = ST.xeroContacts || [];
+  $('#xcStatus').textContent = list.length ? list.length + ' contacts loaded' : 'no contact list loaded';
+  var host = $('#xcPanel');
+  if (!list.length) { host.innerHTML = ''; return; }
+
+  var m = CB.matchXeroContacts(ST.master.pharmacies, list);
+  var n = { ok: 0, rename: 0, review: 0, none: 0 };
+  m.forEach(function (x) { n[x.state]++; });
+
+  var needAttention = m.filter(function (x) { return x.state === 'rename' || x.state === 'review' || x.state === 'none'; });
+
+  host.innerHTML =
+    '<div class="row" style="margin-top:12px">' +
+    chip(n.ok + ' already exact', n.ok ? 'ok' : '') +
+    chip(n.rename + ' safe to apply', n.rename ? 'warn' : '') +
+    chip(n.review + ' need a decision', n.review ? 'bad' : '') +
+    chip(n.none + ' no contact in Xero', n.none ? 'bad' : '') +
+    '</div>' +
+
+    (n.rename ? '<div class="row" style="margin:8px 0"><button class="btn sm" onclick="applyXeroNames(true)">' +
+      'Apply the ' + n.rename + ' near-exact match(es)</button>' +
+      '<span class="mut">score ≥ 0.90 — same company, different punctuation or Sdn Bhd spelling</span></div>' : '') +
+
+    (needAttention.length ?
+      '<div class="scroll" style="max-height:340px;margin-top:10px"><table>' +
+      '<tr><th>Pharmacy</th><th>Contact now in the tool</th><th>Best match in Xero</th><th class="num">Score</th><th>Use</th></tr>' +
+      needAttention.map(function (x) {
+        return '<tr><td>' + esc(x.pharmacy.trading) + '<div class="mut">' + esc(x.pharmacy.code) + '</div></td>' +
+          '<td class="mut">' + esc(x.current || '(blank)') + '</td>' +
+          '<td>' + (x.suggestion ? esc(x.suggestion.name) : '<span class="badge bad">nothing similar</span>') + '</td>' +
+          '<td class="num">' + (x.score ? x.score.toFixed(2) : '—') + '</td>' +
+          '<td><select onchange="setPharmContact(' + x.index + ',this.value)"><option value="">— keep current —</option>' +
+          list.map(function (c) {
+            return '<option value="' + esc(c.name) + '"' +
+              (x.suggestion && c.name === x.suggestion.name ? ' selected' : '') + '>' + esc(c.name) + '</option>';
+          }).join('') + '</select></td></tr>';
+      }).join('') + '</table></div>'
+      : '<div class="note" style="border-color:var(--ok);background:#00a99d0f">✓ Every pharmacy already matches a Xero contact exactly.</div>') +
+
+    '<div style="margin-top:16px"><b>Add a contact as a brand owner</b>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<select id="xcBrandPick" style="min-width:280px">' +
+    list.map(function (c) { return '<option value="' + esc(c.name) + '">' + esc(c.name) + '</option>'; }).join('') +
+    '</select><button class="btn sm" onclick="addBrandOwnerFromXero()">+ Add as brand owner</button></div></div>';
+}
+
+function setPharmContact(i, name) {
+  if (!name || !requireWrite()) return;
+  var row = ST.master.pharmacies[i], was = row.contact;
+  row.contact = name;
+  DB.savePharmacy(row).then(function () {
+    recompute(); renderPharmacies(); renderXeroContacts();
+    toast('Xero contact set to "' + name + '"', 'ok');
+  }, function (e) { row.contact = was; err(e); renderXeroContacts(); });
+}
+
+/* Only the near-exact ones. A 0.7 "looks similar" match is how you invoice the
+ * wrong company, so those stay a manual decision. */
+function applyXeroNames(onlySafe) {
+  if (!requireWrite()) return;
+  var m = CB.matchXeroContacts(ST.master.pharmacies, ST.xeroContacts || []);
+  var todo = m.filter(function (x) {
+    return x.suggestion && (!onlySafe || x.state === 'rename');
+  });
+  if (!todo.length) { toast('Nothing to apply'); return; }
+
+  var writes = todo.map(function (x) {
+    var row = ST.master.pharmacies[x.index];
+    row.contact = x.suggestion.name;
+    if (x.suggestion.email && !row.email) row.email = x.suggestion.email;
+    return DB.savePharmacy(row);
+  });
+  Promise.all(writes)
+    .then(refreshMaster)
+    .then(function () {
+      toast(todo.length + ' pharmacy contact(s) set from Xero', 'ok');
+      DB.audit('xero_contacts_applied', { count: todo.length });
+    }, function (e) {
+      err(e);
+      refreshMaster();                          // never leave the screen lying
+    });
+}
+
+function addBrandOwnerFromXero() {
+  if (!requireWrite()) return;
+  var name = $('#xcBrandPick').value; if (!name) return;
+  var c = (ST.xeroContacts || []).filter(function (x) { return x.name === name; })[0] || { name: name };
+  if (ST.master.projects.some(function (p) { return CB.normKey(p.xeroContact) === CB.normKey(name); })) {
+    toast('"' + name + '" is already a brand owner'); return;
+  }
+  var code = c.accountNumber || 'BO-' + String(ST.master.projects.length + 1).padStart(3, '0');
+  while (ST.master.projects.some(function (p) { return p.code === code; })) code = code + 'X';
+  DB.saveBrandOwner({ code: code, name: name, xeroContact: name, email: c.email || '' })
+    .then(refreshMaster)
+    .then(function () { toast('"' + name + '" added as a brand owner', 'ok'); }, err);
+}
+
+function exportMaster() {
+  var wb = XLSX.utils.book_new();
+  var s = function (n, cols, arr) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cols].concat(arr)), n);
+  };
+  s('Brand owners', ['code', 'name', 'xeroContact', 'email'],
+    ST.master.projects.map(function (p) { return [p.code, p.name, p.xeroContact, p.email]; }));
+  s('Products', ['sku', 'name', 'project', 'price', 'aliases'],
+    ST.master.products.map(function (p) { return [p.sku, p.name, p.project, p.price, (p.aliases || []).join(' | ')]; }));
+  s('Pharmacies', ['code', 'trading', 'contact', 'email', 'tin', 'aliases'],
+    ST.master.pharmacies.map(function (p) { return [p.code, p.trading, p.contact, p.email, p.tin, (p.aliases || []).join(' | ')]; }));
+  XLSX.writeFile(wb, 'CTG4U_Consignment_Master.xlsx');
+}
+function importMasterPick() { $('#fileMaster').click(); }
+$('#fileMaster').onchange = function (e) {
+  var f = e.target.files[0]; if (!f) return;
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var wb = XLSX.read(new Uint8Array(r.result), { type: 'array' });
+      var get = function (n) {
+        var sn = wb.SheetNames.filter(function (s) { return CB.normKey(s) === CB.normKey(n); })[0];
+        return sn ? XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval: '' }) : null;
+      };
+      var bo = get('Brand owners'), pr = get('Products'), ph = get('Pharmacies');
+      var spl = function (v) { return String(v || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean); };
+      if (bo) ST.master.projects = bo.map(function (r) { return { code: r.code, name: r.name, xeroContact: r.xeroContact, email: r.email }; });
+      if (pr) ST.master.products = pr.map(function (r) { return { sku: r.sku, name: r.name, project: r.project, price: r.price, aliases: spl(r.aliases) }; });
+      if (ph) ST.master.pharmacies = ph.map(function (r) { return { code: r.code, trading: r.trading, contact: r.contact, email: r.email, tin: r.tin, aliases: spl(r.aliases) }; });
+      save(); recompute(); renderProjects(); renderProducts(); renderPharmacies();
+      toast('Master data imported', 'ok');
+    } catch (err) { toast('Import failed: ' + err.message, 'bad'); }
+  };
+  r.readAsArrayBuffer(f);
+  e.target.value = '';
+};
+
+/* =========================================================== SETTINGS */
+var CFG_FIELDS = {
+  terms: [
+    ['discountPct', 'Pharmacy discount %', 'Taken off every line and rounded there', 'number'],
+    ['mgmtFeePerPharmacy', 'Management fee per pharmacy (MYR)', 'Charged once per pharmacy by each brand owner', 'number'],
+    ['serviceFeePct', 'Service fee % of gross sales', 'Calculated before the discount, not after', 'number'],
+    ['sstPct', 'SST %', 'Applied to the two fees above', 'number'],
+    ['sstOnMgmtFee', 'SST on management fee', 'Include it in the SST base', 'bool'],
+    ['sstOnServiceFee', 'SST on service fee', 'Include it in the SST base', 'bool'],
+    ['insuranceFeePct', 'Insurance % of gross sales', 'The Insurans line on the pharmacy sheets. Shown to the pharmacy but deducted from the brand owner', 'number'],
+    ['sstOnInsurance', 'SST on insurance', 'Off by default: insurance is not a taxable service', 'bool']
+  ],
+  xero: [
+    ['acctPassThrough', 'Pass-through account (pharmacy invoices + payout bills)', 'A liability owed to brand owners, not revenue', 'text'],
+    ['acctMgmtIncome', 'Management fee income account', 'Revenue', 'text'],
+    ['acctServiceIncome', 'Service fee income account', 'Revenue', 'text'],
+    ['acctInsuranceIncome', 'Insurance income account', 'Revenue. Same as the service fee account unless you separate it', 'text'],
+    ['taxTypeExempt', 'TaxType for non-taxable lines', 'Must match a Xero tax rate name exactly', 'text'],
+    ['taxTypeSST', 'TaxType for SST lines', 'SST TaxType', 'text'],
+    ['dueDays', 'Payment terms (days)', 'Added to the document date', 'number']
+  ],
+  num: [
+    ['pharmacyInvPrefix', 'Pharmacy invoice prefix', 'e.g. CTG4U2607-0001', 'text'],
+    ['serviceInvPrefix', 'Fee invoice prefix', 'Billed to the brand owner', 'text'],
+    ['payoutBillPrefix', 'Payout bill prefix', 'Owed to the brand owner', 'text'],
+    ['startNumber', 'Start running number at', 'Used only before any numbers have been reserved', 'number'],
+    ['invoiceDate', 'Document date (blank = month end)', 'Applies to all three document types', 'date']
+  ],
+  tracking: [
+    ['trackingCategory', 'Tracking category', 'Name it exactly as Xero has it. Blank turns tracking off', 'text'],
+    ['trackingBy', 'Tag each line by', 'A pharmacy carrying several brands gets a different tag per line', 'choice',
+      [['brandOwner', 'Brand owner'], ['pharmacy', 'Pharmacy']]],
+    ['trackingCategory2', 'Second category (optional)', 'Xero allows two', 'text'],
+    ['trackingBy2', 'Tag the second by', 'Only used when a second category is named', 'choice',
+      [['pharmacy', 'Pharmacy'], ['brandOwner', 'Brand owner']]]
+  ]
+};
+function renderCfg() {
+  var mk = function (host, fields) {
+    $(host).innerHTML = fields.map(function (f) {
+      var k = f[0], v = ST.cfg[k];
+      if (f[3] === 'choice') {
+        return '<div class="kpi"><div class="l">' + f[1] + '</div><div class="mut" style="margin-bottom:6px">' +
+          f[2] + '</div><select style="width:100%" onchange="setCfg(\'' + k + '\',this.value)">' +
+          f[4].map(function (o) {
+            return '<option value="' + o[0] + '"' + (v === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+          }).join('') + '</select></div>';
+      }
+      if (f[3] === 'bool') {
+        return '<label class="kpi row" style="gap:9px;cursor:pointer"><input type="checkbox" ' + (v ? 'checked' : '') +
+          ' onchange="setCfg(\'' + k + '\',this.checked)"><span><span class="l">' + f[1] + '</span><div class="mut">' + f[2] + '</div></span></label>';
+      }
+      return '<div class="kpi"><div class="l">' + f[1] + '</div><div class="mut" style="margin-bottom:6px">' + f[2] + '</div>' +
+        '<input type="' + (f[3] === 'number' ? 'number' : f[3] === 'date' ? 'date' : 'text') + '" step="0.01" value="' +
+        esc(v == null ? '' : v) + '" style="width:100%" onchange="setCfg(\'' + k + '\',this.value)"></div>';
+    }).join('');
+  };
+  mk('#cfgTerms', CFG_FIELDS.terms); mk('#cfgXero', CFG_FIELDS.xero);
+  mk('#cfgTrack', CFG_FIELDS.tracking); mk('#cfgNum', CFG_FIELDS.num);
+}
+function setCfg(k, v) {
+  if (typeof CB.DEFAULTS[k] === 'number') v = CB.num(v);
+  if (typeof CB.DEFAULTS[k] === 'boolean') v = !!v;
+  ST.cfg[k] = v; save(); recompute();
+  toast('Setting saved — all figures recalculated');
+}
+
+$('#period').onchange = function () { ST.cfg.period = this.value; save(); recompute(); toast('Period set to ' + CB.periodLabel(this.value)); };
+
+function backup() {
+  dl('CTG4U_Consignment_Master_' + new Date().toISOString().slice(0, 10) + '.json',
+    new Blob([JSON.stringify({ master: ST.master, cfg: ST.cfg }, null, 1)], { type: 'application/json' }));
+}
+function restorePick() { $('#fileRestore').click(); }
+$('#fileRestore').onchange = function (e) {
+  var f = e.target.files[0]; if (!f || !requireWrite()) return;
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var d = JSON.parse(r.result);
+      if (!d.master) throw new Error('not a master data file');
+      if (!confirm('Merge ' + (d.master.pharmacies || []).length + ' pharmacies, ' +
+        (d.master.projects || []).length + ' brand owners and ' +
+        (d.master.products || []).length + ' products into the shared database?')) return;
+      importMasterData(d);
+    } catch (e2) { toast('Import failed: ' + e2.message, 'bad'); }
+  };
+  r.readAsText(f); e.target.value = '';
+};
+
+/* Pharmacies upsert on code, then brand owners, then products - a product
+ * cannot be written before the brand owner it points at exists. */
+function importMasterData(d) {
+  var m = d.master;
+  toast('Importing...');
+  DB.upsertPharmacies(m.pharmacies || [])
+    .then(function () {
+      return (m.projects || []).reduce(function (p, b) {
+        return p.then(function () { return DB.saveBrandOwner(b).catch(function () { }); });
+      }, Promise.resolve());
+    })
+    .then(refreshMaster)
+    .then(function () {
+      return (m.products || []).reduce(function (p, pr) {
+        return p.then(function () { return persistRow('products', pr).catch(function () { }); });
+      }, Promise.resolve());
+    })
+    .then(function () {
+      if (d.cfg) { ST.cfg = CB.cfg(d.cfg); return DB.saveSettings(ST.cfg); }
+    })
+    .then(refreshMaster)
+    .then(function () { renderCfg(); toast('Master data imported', 'ok'); }, err);
+}
+
+/* ------------------------------------------------------ finalise a run */
+/* Draft figures become a run: numbers are reserved from the database, the
+ * lines and settlements are stored, and the period is closed. After this the
+ * same numbers can never be handed out again. */
+function finaliseRun() {
+  if (!requireWrite()) return;
+  if (!ST.settlement || !ST.settlement.projects.length) { toast('Nothing to finalise', 'bad'); return; }
+  if (!ST.check || !ST.check.ok) {
+    toast('The reconciliation does not balance - fix that before finalising', 'bad'); return;
+  }
+
+  /* A row nobody could attribute is dropped from the pharmacy invoices AND from
+   * the settlement, so the reconciliation still balances perfectly and the money
+   * just disappears from the month. That is the one failure this system must
+   * never make quietly - refuse the run and name the rows instead. */
+  var orphan = (ST.lines || []).filter(function (l) { return l.gross && (!l.project || !l.pharmacy); });
+  if (orphan.length) {
+    var lost = CB.sumMoney(orphan, function (l) { return l.gross; });
+    alert(orphan.length + ' row(s) worth ' + M(lost) + ' are not attributed to a brand owner ' +
+      'or to a pharmacy.\n\nThey would be left out of the invoices AND out of the settlement, so ' +
+      'nobody would be billed for them and nobody would be paid for them - and the reconciliation ' +
+      'would still balance, so nothing would look wrong.\n\nAssign them on the Review tab first.');
+    go('review');
+    return;
+  }
+  var period = ST.cfg.period;
+
+  DB.periodStatus(period).then(function (st) {
+    if (st.finalised) {
+      alert(CB.periodLabel(period) + ' has already been finalised.\n\n' +
+        'Void that run on the History tab first if it really needs redoing.');
+      return;
+    }
+    var extra = st.documentCount
+      ? '\n\nNOTE: ' + st.documentCount + ' document number(s) were already issued for this period. ' +
+        'The new ones continue after them, so nothing will clash.'
+      : '';
+    if (!confirm('Finalise ' + CB.periodLabel(period) + '?\n\n' +
+      ST.billing.length + ' pharmacy invoices\n' +
+      ST.settlement.projects.length + ' brand owner fee invoices and payout bills\n' +
+      'Total payout ' + M(CB.sumMoney(ST.settlement.projects, function (p) { return p.totalPayout; })) +
+      extra)) return;
+
+    var nP = ST.billing.length, nB = ST.settlement.projects.length;
+    Promise.all([
+      DB.reserveNumbers('pharmacy_invoice', period, nP),
+      DB.reserveNumbers('fee_invoice', period, nB),
+      DB.reserveNumbers('payout_bill', period, nB)
+    ]).then(function (starts) {
+      ST.cfg.startPharmacy = starts[0];
+      ST.cfg.startFee = starts[1];
+      ST.cfg.startPayout = starts[2];
+
+      // rebuild the documents so they carry the reserved numbers
+      CB.xeroPharmacyInvoices(ST.billing, ST.cfg);
+      CB.xeroServiceInvoices(ST.settlement, ST.cfg);
+      CB.xeroPayoutBills(ST.settlement, ST.cfg);
+
+      var totals = {
+        salesAmount: CB.sumMoney(ST.settlement.projects, function (p) { return p.salesAmount; }),
+        netSales: CB.sumMoney(ST.settlement.projects, function (p) { return p.netSales; }),
+        fees: CB.sumMoney(ST.settlement.projects, function (p) { return CB.r2(p.mgmtFee + p.serviceFee); }),
+        sst: CB.sumMoney(ST.settlement.projects, function (p) { return p.sst; }),
+        payout: CB.sumMoney(ST.settlement.projects, function (p) { return p.totalPayout; }),
+        pharmacies: ST.billing.length, brandOwners: ST.settlement.projects.length
+      };
+
+      var docs = [];
+      ST.billing.forEach(function (B) {
+        docs.push({
+          docType: 'pharmacy_invoice', number: B.invoiceNumber,
+          contact: B.pharmacy.contact || B.pharmacy.trading, amount: B.net,
+          pharmacyId: B.pharmacy.id
+        });
+      });
+      ST.settlement.projects.forEach(function (P) {
+        docs.push({
+          docType: 'fee_invoice', number: P.serviceInvoiceNumber,
+          contact: P.project.xeroContact || P.project.name,
+          amount: CB.r2(P.mgmtFee + P.serviceFee + P.sst),
+          brandOwnerId: P.project.id
+        });
+        docs.push({
+          docType: 'payout_bill', number: P.payoutBillNumber,
+          contact: P.project.xeroContact || P.project.name, amount: P.netSales,
+          brandOwnerId: P.project.id
+        });
+      });
+
+      var runId;
+      DB.createRun(period, ST.cfg, totals, ST.sheets.map(function (x) { return x.file; }))
+        .then(function (run) { runId = run.id; ST.runId = runId; return DB.saveRunLines(runId, ST.lines); })
+        .then(function () { return DB.saveSettlements(runId, ST.settlement.projects); })
+        .then(function () { return DB.recordDocuments(runId, period, docs); })
+        .then(function () { return DB.finaliseRun(runId, totals); })
+        .then(function () { return DB.audit('run_finalised', { period: period, totals: totals }); })
+        .then(loadRuns)
+        .then(function () {
+          renderOut();
+          renderXeroPost();
+          toast('Finalised. ' + docs.length + ' document numbers issued and recorded.', 'ok');
+          go('runs');
+        }, function (e) {
+          err(e);
+          toast('The run was NOT finalised. The reserved numbers stay burnt - the next run continues after them, which is safe.', 'bad');
+        });
+    }, err);
+  }, err);
+}
+
+/* ------------------------------------------------------------------ Xero */
+
+var XERO = null;   // last known connection status
+
+function renderXero() {
+  var host = $('#xeroPanel'); if (!host) return;
+  DB.xero.status().then(function (st) {
+    XERO = st || { connected: false };
+    var admin = ME && ME.role === 'admin';
+    if (!XERO.connected) {
+      host.innerHTML =
+        '<div class="row"><span class="badge warn">not connected</span>' +
+        (admin
+          ? '<button class="btn sm" onclick="xeroConnect()">Connect to Xero</button>'
+          : '<span class="mut">An admin needs to connect it.</span>') +
+        '</div>';
+      return;
+    }
+    host.innerHTML =
+      '<div class="row"><span class="badge ok">connected</span>' +
+      '<b>' + esc(XERO.tenantName || 'Xero organisation') + '</b>' +
+      '<span class="mut">since ' + esc(String(XERO.connectedAt || '').slice(0, 10)) + '</span>' +
+      (admin ? '<span class="spacer"></span><button class="btn sm danger" onclick="xeroDisconnect()">Disconnect</button>' : '') +
+      '</div>' +
+      (XERO.tenantName && XERO.tenantName.toUpperCase().indexOf('CTG4U RETAIL') < 0
+        ? '<div class="note warn" style="margin-bottom:0">This is connected to <b>' + esc(XERO.tenantName) +
+          '</b>, which is not CTG4U RETAIL. Disconnect and reconnect choosing the right organisation ' +
+          'before sending anything.</div>'
+        : '');
+  }, function (e) {
+    host.innerHTML = '<span class="badge bad">unavailable</span> <span class="mut">' + esc(e.message) + '</span>';
+  });
+}
+
+function xeroConnect() {
+  if (!requireWrite()) return;
+  toast('Opening Xero\u2026');
+  DB.xero.connect().then(function (url) { location.href = url; }, err);
+}
+
+function xeroDisconnect() {
+  if (!confirm('Disconnect Xero?\n\nNothing already in Xero is touched. You will need to authorise again ' +
+    'before the next month can be sent.')) return;
+  DB.xero.disconnect().then(renderXero).then(function () { toast('Xero disconnected', 'ok'); }, err);
+}
+
+/* The Outputs tab: what can actually be sent, and what happened last time. */
+function renderXeroPost() {
+  var host = $('#xeroPost'); if (!host) return;
+  if (!ST.runId) {
+    DB.periodStatus(ST.cfg.period).then(function (st) {
+      var fin = (st.runs || []).filter(function (r) { return r.status === 'final'; })[0];
+      if (!fin) { host.innerHTML = '<span class="mut">Finalise the month first.</span>'; return; }
+      ST.runId = fin.id; renderXeroPost();
+    }, function () { host.innerHTML = ''; });
+    return;
+  }
+  DB.getRun(ST.runId).then(function (d) {
+    var docs = d.documents || [];
+    var done = docs.filter(function (x) { return x.xero_invoice_id; }).length;
+    var bad = docs.filter(function (x) { return x.xero_status === 'failed'; });
+    var left = docs.length - done;
+
+    host.innerHTML =
+      '<div class="row">' +
+      (XERO && XERO.connected
+        ? (left && CAN_WRITE
+            ? '<button class="btn" id="xeroGo" onclick="xeroPost()">Send ' + left + ' document(s) to Xero</button>'
+            : (left ? '<span class="mut">Your account has read-only access.</span>'
+                    : '<span class="badge ok">all ' + docs.length + ' document(s) are in Xero</span>'))
+        : '<span class="badge warn">connect Xero on the Settings tab first</span>') +
+      '<span class="mut">' + done + ' of ' + docs.length + ' created</span>' +
+      '</div>' +
+      (bad.length
+        ? '<div class="note warn"><b>' + bad.length + ' document(s) were refused by Xero.</b> They stay ' +
+          'unsent, so fixing the cause and pressing send again picks up only those.' +
+          '<div class="scroll" style="max-height:190px;margin-top:9px"><table>' +
+          '<tr><th>Document</th><th>Contact</th><th>Why</th></tr>' +
+          bad.map(function (x) {
+            return '<tr><td class="mono">' + esc(x.number) + '</td><td>' + esc(x.contact_name) +
+              '</td><td>' + esc(x.xero_error || '') + '</td></tr>';
+          }).join('') + '</table></div></div>'
+        : '');
+  }, function () { host.innerHTML = ''; });
+}
+
+function xeroPost() {
+  if (!requireWrite() || !ST.runId) return;
+  var btn = $('#xeroGo');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending to Xero\u2026'; }
+  toast('Creating the invoices in Xero. This can take a moment.');
+
+  DB.xero.post(ST.runId).then(function (r) {
+    renderXeroPost();
+    if (r.failed) {
+      toast(r.posted + ' created, ' + r.failed + ' refused by Xero \u2014 see the list below.', 'bad');
+    } else if (r.posted) {
+      toast(r.posted + ' draft document(s) created in Xero. Approve them there.', 'ok');
+    } else {
+      toast(r.message || 'Nothing left to send.', 'ok');
+    }
+  }, function (e) {
+    renderXeroPost();
+    err(e);
+  });
+}
+
+/* ------------------------------------------------------------- history */
+function loadRuns() {
+  return DB.listRuns(100).then(function (r) { ST.runs = r; renderRuns(); return r; });
+}
+
+function renderRuns() {
+  var host = $('#runsList'); if (!host) return;
+  if (!ST.runs.length) {
+    host.innerHTML = '<div class="note">No runs yet. Finalise a month on the Outputs tab and it appears here.</div>';
+    return;
+  }
+  host.innerHTML = '<div class="scroll"><table>' +
+    '<tr><th>Period</th><th>Status</th><th class="num">Sales</th><th class="num">Net sales</th>' +
+    '<th class="num">Fees</th><th class="num">Payout</th><th>When</th><th></th></tr>' +
+    ST.runs.map(function (r) {
+      var t = r.totals || {};
+      return '<tr><td><b>' + esc(CB.periodLabel(r.period)) + '</b></td>' +
+        '<td><span class="st ' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
+        '<td class="num">' + (t.salesAmount != null ? M(t.salesAmount) : '-') + '</td>' +
+        '<td class="num">' + (t.netSales != null ? M(t.netSales) : '-') + '</td>' +
+        '<td class="num">' + (t.fees != null ? M(t.fees) : '-') + '</td>' +
+        '<td class="num"><b>' + (t.payout != null ? M(t.payout) : '-') + '</b></td>' +
+        '<td class="mut">' + esc(String(r.created_at || '').slice(0, 16).replace('T', ' ')) + '</td>' +
+        '<td><button class="btn sm ghost" onclick="showRun(\'' + r.id + '\')">Documents</button>' +
+        (r.status === 'final' && CAN_WRITE
+          ? ' <button class="btn sm ghost" onclick="voidRun(\'' + r.id + '\')">Void</button>' : '') +
+        '</td></tr>';
+    }).join('') + '</table></div><div id="runDetail"></div>';
+}
+
+function showRun(id) {
+  DB.getRun(id).then(function (d) {
+    var byType = {};
+    d.documents.forEach(function (x) { (byType[x.doc_type] = byType[x.doc_type] || []).push(x); });
+    var label = {
+      pharmacy_invoice: 'Pharmacy invoices',
+      fee_invoice: 'Brand owner fee invoices',
+      payout_bill: 'Brand owner payout bills'
+    };
+    $('#runDetail').innerHTML =
+      '<div class="card" style="margin-top:16px"><h2>' + esc(CB.periodLabel(d.run.period)) +
+      ' <span class="st ' + esc(d.run.status) + '">' + esc(d.run.status) + '</span></h2>' +
+      '<div class="hint">Rates used: discount ' + CB.r2(d.run.cfg.discountPct) + '%, management fee MYR ' +
+      CB.money(d.run.cfg.mgmtFeePerPharmacy) + ' per pharmacy, service fee ' + CB.r2(d.run.cfg.serviceFeePct) +
+      '% of gross, SST ' + CB.r2(d.run.cfg.sstPct) + '%.</div>' +
+
+      '<table style="margin-bottom:16px"><tr><th>Brand owner</th><th class="num">Sales</th>' +
+      '<th class="num">Net sales</th><th class="num">Fees</th><th class="num">SST</th>' +
+      '<th class="num">Payout</th><th>Fee invoice</th><th>Payout bill</th></tr>' +
+      d.settlements.map(function (x) {
+        return '<tr><td>' + esc(x.brand_owners ? x.brand_owners.name : '-') + '</td>' +
+          '<td class="num">' + M(x.sales_amount) + '</td><td class="num">' + M(x.net_sales) + '</td>' +
+          '<td class="num">' + M(CB.r2(+x.mgmt_fee + +x.service_fee)) + '</td>' +
+          '<td class="num">' + M(x.sst) + '</td><td class="num"><b>' + M(x.total_payout) + '</b></td>' +
+          '<td class="mono">' + esc(x.fee_invoice_number || '-') + '</td>' +
+          '<td class="mono">' + esc(x.payout_bill_number || '-') + '</td></tr>';
+      }).join('') + '</table>' +
+
+      Object.keys(byType).map(function (k) {
+        return '<details><summary>' + esc(label[k] || k) + ' (' + byType[k].length + ')</summary>' +
+          '<div class="scroll" style="max-height:240px"><table><tr><th>Number</th><th>Contact</th>' +
+          '<th class="num">Amount</th></tr>' +
+          byType[k].map(function (x) {
+            return '<tr><td class="mono">' + esc(x.number) + '</td><td>' + esc(x.contact_name) +
+              '</td><td class="num">' + M(x.amount) + '</td></tr>';
+          }).join('') + '</table></div></details>';
+      }).join('') + '</div>';
+    $('#runDetail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, err);
+}
+
+/* Voiding keeps the run and its numbers on record. The numbers stay burnt on
+ * purpose: they may already be sitting in Xero. */
+function voidRun(id) {
+  if (!requireWrite()) return;
+  var note = prompt('Why is this run being voided? (kept on the record)');
+  if (note === null) return;
+  DB.voidRun(id, note)
+    .then(function () { return DB.audit('run_voided', { run: id, note: note }); })
+    .then(loadRuns)
+    .then(function () { toast('Run voided. Its document numbers stay reserved.', 'ok'); }, err);
+}
+
+/* --------------------------------------------------------------- access */
+function renderUsers() {
+  var host = $('#usersList'); if (!host) return;
+  if (!ME || ME.role !== 'admin') { host.innerHTML = ''; return; }
+  DB.listUsers().then(function (us) {
+    host.innerHTML = '<div class="scroll"><table><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th></tr>' +
+      us.map(function (u) {
+        var self = ME && u.id === ME.id;
+        return '<tr><td>' + esc(u.email) + (self ? ' <span class="mut">(you)</span>' : '') + '</td>' +
+          '<td>' + esc(u.full_name || '') + '</td>' +
+          '<td><select ' + (self ? 'disabled' : '') +
+          ' onchange="setRole(\'' + u.id + '\',this.value,' + (u.active ? 'true' : 'false') + ')">' +
+          ['pending', 'viewer', 'staff', 'admin'].map(function (r) {
+            return '<option value="' + r + '"' + (u.role === r ? ' selected' : '') + '>' + r + '</option>';
+          }).join('') + '</select></td>' +
+          '<td><input type="checkbox" ' + (u.active ? 'checked' : '') + ' ' + (self ? 'disabled' : '') +
+          ' onchange="setRole(\'' + u.id + '\',\'' + u.role + '\',this.checked)"></td></tr>';
+      }).join('') + '</table></div>' +
+      '<div class="hint" style="margin-top:10px">You cannot change your own role - that is what stops the last ' +
+      'admin locking everyone out by accident.</div>';
+  }, err);
+}
+function setRole(id, role, active) {
+  DB.setUserRole(id, role, active)
+    .then(function () { return DB.audit('role_changed', { user: id, role: role, active: active }); })
+    .then(renderUsers)
+    .then(function () { toast('Access updated', 'ok'); }, function (e) { err(e); renderUsers(); });
+}
+
+/* ------------------------------------------------------------- session */
+function signOut() { DB.signOut().then(function () { location.href = 'index.html'; }); }
+
+function gate(title, msg) {
+  $('#gateTitle').textContent = title;
+  $('#gateMsg').innerHTML = msg;
+  $('#gate').style.display = 'grid';
+}
+function ungate() { $('#gate').style.display = 'none'; }
+
+/* ------------------------------------------------------------- boot */
+function boot() {
+  $('#period').value = ST.cfg.period;
+  renderSteps(); renderCfg(); renderXeroContacts();
+  renderProjects(); renderProducts(); renderPharmacies();
+}
+
+function start() {
+  if (DB.unconfigured) return;          // db.js has already explained why
+  // Someone may arrive here straight from a link carrying its tokens.
+  DB.consumeUrlSession().catch(function () { })
+    .then(function () { return DB.session(); })
+    .then(function (sess) {
+    if (!sess) { location.href = 'index.html'; return; }
+    return DB.me().then(function (me) {
+      ME = me;
+      if (!me) {
+        gate('Almost there', 'Your account exists but has not been set up yet. ' +
+          'Ask an administrator to give you access.');
+        return;
+      }
+      if (!me.active || me.role === 'pending') {
+        gate('Waiting for approval',
+          'Signed in as <b>' + esc(me.email) + '</b>.<br>' +
+          (me.active ? 'An administrator needs to give this account a role before it can see anything.'
+            : 'This account has been deactivated.'));
+        return;
+      }
+
+      CAN_WRITE = me.role === 'staff' || me.role === 'admin';
+      document.body.className = CAN_WRITE ? 'can-write' : 'readonly';
+      $('#whoAv').textContent = (me.full_name || me.email).trim().charAt(0).toUpperCase();
+      $('#whoName').textContent = me.full_name || me.email;
+      $('#whoRole').innerHTML = '<span class="ro ' + esc(me.role) + '">' + esc(me.role) + '</span>';
+      if (me.role === 'admin') { $('#navUsers').style.display = ''; renderUsers(); }
+
+      return Promise.all([DB.loadSettings(), DB.loadMaster(), loadRuns()])
+        .then(function (r) {
+          if (r[0]) ST.cfg = CB.cfg(r[0]);
+          ST.master = r[1];
+          if (!ST.cfg.period) {
+            var d = new Date(); d.setDate(0);           // last day of previous month
+            ST.cfg.period = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+          }
+          // a reserved block belongs to the run that used it, never to the next one
+          ST.cfg.startPharmacy = 0; ST.cfg.startFee = 0; ST.cfg.startPayout = 0;
+          boot(); recompute(); ungate(); reportXeroReturn(); renderXero();
+          if (!ST.master.projects.length) {
+            toast('No brand owners yet - add them on the Master data tab before importing', 'bad');
+          }
+        });
+    });
+  }).catch(function (e) {
+    gate('Could not load', esc(e.message || String(e)) +
+      '<br><br><span class="mut">If this mentions the schema, add "consignment" under ' +
+      'Project Settings &rarr; Data API &rarr; Exposed schemas.</span>');
+  });
+}
+
+/* Xero sends the browser back here after the authorisation screen. */
+function reportXeroReturn() {
+  var q = new URLSearchParams(location.search);
+  var r = q.get('xero'); if (!r) return;
+  var say = {
+    connected: ['Xero connected' + (q.get('org') ? ' to ' + q.get('org') : '') + '.', 'ok'],
+    denied: ['Xero authorisation was cancelled.', 'bad'],
+    badreply: ['Xero sent an incomplete reply. Try connecting again.', 'bad'],
+    badstate: ['That authorisation link did not match this session. Try connecting again.', 'bad'],
+    expired: ['That authorisation took too long. Try connecting again.', 'bad'],
+    tokenfail: ['Xero refused the authorisation code. Check the app credentials on the server.', 'bad'],
+    notenant: ['No Xero organisation was granted. Connect again and pick one.', 'bad']
+  }[r];
+  if (say) toast(say[0], say[1]);
+  history.replaceState({}, document.title, location.pathname);
+  renderXero();
+}
+
+DB.onAuth(function (sess) { if (!sess && !DB.unconfigured) location.href = 'index.html'; });
+start();
+</script>
+</body>
+</html>

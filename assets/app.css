@@ -1,0 +1,542 @@
+/* ============================================================================
+   CTG4U RETAIL — Consignment Billing
+   Light interface, modelled on Xero's accounting UI.
+
+   The conventions borrowed on purpose, because the operator moves between Xero
+   and this all day and the two should not fight each other:
+     · white panels on a pale grey canvas, separated by hairlines, not shadows
+     · small 4px radii — Xero is square, not soft
+     · one blue that means "action"; colour is never decoration
+     · amounts set in the UI sans with TABULAR figures and right-aligned, the
+       way Xero prints them, rather than in a monospace face
+     · every control on the same 36px rhythm, so a button beside an input beside
+       a select reads as one row rather than three heights
+     · a visible focus ring on everything reachable by keyboard
+
+   Public Sans carries the interface — a humanist sans in the same family of
+   shapes as Xero Sans. IBM Plex Mono is kept only for document numbers and
+   codes, where character-by-character reading matters.
+   ========================================================================= */
+
+:root{
+  /* surfaces */
+  --canvas:#f4f7f9;
+  --surface:#ffffff;
+  --surface-2:#fafbfc;
+  --band:#f1f5f8;
+  --line:#d9e1e8;
+  --line-strong:#c1c9d0;
+  --rule:#ebf0f4;
+
+  /* type */
+  --tx:#1b2733;
+  --tx2:#5b6b7c;
+  --tx3:#8494a5;
+
+  /* action + brand */
+  --blue:#0077c8;
+  --blue-dk:#00629f;
+  --blue-dkr:#00507f;
+  --blue-tint:#e8f3fb;
+  --blue-ring:#0077c840;
+  --cyan:#13b5ea;
+
+  /* semantics */
+  --ok:#00a99d;      --ok-tx:#04796f;   --ok-bg:#00a99d14;
+  --warn:#e8a33d;    --warn-tx:#8a5a0c; --warn-bg:#e8a33d1f;
+  --bad:#d64545;     --bad-tx:#a82f2f;  --bad-bg:#d6454514;
+
+  /* aliases so older rules and inline styles keep resolving */
+  --bg:var(--canvas); --bg2:var(--surface-2);
+  --card:var(--surface); --card2:var(--band);
+  --coral:var(--blue); --coral2:var(--blue-dk);
+
+  --sans:"Public Sans",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --num:"Public Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+
+  --r:4px;
+  --r-lg:6px;
+  --h:36px;                    /* the single control height everything sits on */
+  --h-sm:28px;
+  --shadow:0 1px 2px #1b273312;
+  --shadow-lg:0 6px 20px -6px #1b273333;
+  --lift:0 1px 0 #1b27330f;    /* the hairline under a button that gives it a body */
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+
+body{
+  margin:0;
+  background:var(--canvas);
+  color:var(--tx);
+  font:400 14px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;
+}
+
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.005em;color:var(--tx)}
+a{color:var(--blue);text-underline-offset:2px}
+a:hover{color:var(--blue-dk)}
+
+/* One focus treatment for everything reachable by keyboard. :focus-visible so a
+   mouse click does not leave a ring behind, which is what Xero does too. */
+:where(a,button,input,select,textarea,summary,[tabindex]):focus-visible{
+  outline:2px solid var(--blue);
+  outline-offset:2px;
+  border-radius:var(--r);
+}
+
+.wrap{max-width:1500px;margin:0 auto;padding:0 24px 88px}
+
+/* ------------------------------------------------------------------ header */
+
+/* The blue rail: identity and navigation, the way Xero puts them, so moving
+   between the two applications all day does not mean re-learning the furniture. */
+.topbar{background:var(--blue);color:#fff}
+.tb{
+  max-width:1500px;margin:0 auto;padding:0 24px;min-height:56px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+}
+.tb .mark{
+  width:30px;height:30px;border-radius:5px;flex:none;display:grid;place-items:center;
+  background:#fff;color:var(--blue-dk);font:700 10.5px var(--sans);letter-spacing:.02em;
+}
+.tb .org{
+  font:600 14px var(--sans);color:#fff;white-space:nowrap;
+  padding-right:14px;margin-right:2px;border-right:1px solid #ffffff33;
+}
+.tbr{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+/* on the blue rail these two stop being white boxes and become part of it */
+.tb .periodbox{background:#ffffff1f;border-color:#ffffff40;height:32px}
+.tb .periodbox label{color:#ffffffcc}
+.tb .periodbox input{background:#fff;border-radius:3px;height:24px}
+.tb .who{background:#ffffff1f;border-color:#ffffff40;height:32px;padding:0 6px 0 10px}
+.tb .who .av{background:#fff;color:var(--blue-dk);width:22px;height:22px;font-size:11px}
+.tb .who .nm b{color:#fff}
+.tb .who .nm span{color:#ffffffb3}
+.tb .who .btn.link{color:#fff}
+.tb .who .btn.link:hover{color:#fff;text-decoration:underline}
+
+header{background:var(--surface);border-bottom:1px solid var(--line);padding:20px 0 18px}
+.hd{max-width:1500px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.hd h1{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.015em}
+.hd .sub{color:var(--tx2);font-size:13px;margin-top:5px;max-width:78ch;line-height:1.55}
+.spacer{flex:1}
+
+.periodbox{
+  display:flex;align-items:center;gap:9px;height:var(--h);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0 10px;
+}
+.periodbox label{
+  font-size:11px;color:var(--tx3);text-transform:uppercase;
+  letter-spacing:.06em;font-weight:600;white-space:nowrap;
+}
+.periodbox input{height:28px;padding:0 8px;font:500 13px var(--num);font-variant-numeric:tabular-nums}
+
+.who{
+  display:flex;align-items:center;gap:10px;height:var(--h);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0 6px 0 12px;
+}
+.who .av{
+  width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;
+  background:var(--blue);color:#fff;font:700 12px var(--sans);
+}
+.who .nm{font-size:12.5px;line-height:1.2}
+.who .nm b{display:block;font-weight:600}
+.who .nm span{color:var(--tx3);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+
+/* --------------------------------------------------------------- navigation */
+
+nav{display:flex;gap:0;flex-wrap:wrap;align-self:stretch;align-items:stretch}
+nav button{
+  position:relative;background:transparent;border:0;color:#ffffffd9;
+  padding:0 14px;font:500 13.5px var(--sans);cursor:pointer;
+  transition:color .14s,background .14s;white-space:nowrap;
+}
+nav button::after{
+  content:'';position:absolute;left:8px;right:8px;bottom:0;height:3px;background:#fff;
+  border-radius:2px 2px 0 0;transform:scaleX(0);transition:transform .18s ease;
+}
+nav button:hover{color:#fff;background:#ffffff1a}
+nav button.on{color:#fff;font-weight:600}
+nav button.on::after{transform:scaleX(1)}
+nav button:focus-visible{outline:2px solid #fff;outline-offset:-3px}
+
+/* ------------------------------------------------------------------ panels */
+
+.panel{display:none;padding-top:24px}
+.panel.on{display:block;animation:rise .22s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:20px 22px;margin-bottom:16px;
+}
+.card>h2{font-size:16px;margin-bottom:4px;font-weight:600}
+.card>.hint{color:var(--tx2);font-size:12.5px;margin-bottom:16px;max-width:84ch;line-height:1.6}
+
+/* ===========================================================================
+   Buttons
+   Three ranks and nothing more: one primary per view, plain for everything
+   else, danger only for what cannot be undone. All share the control height so
+   they line up with inputs and selects on the same row.
+   ======================================================================== */
+
+button.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  height:var(--h);padding:0 16px;
+  background:var(--blue);border:1px solid var(--blue);color:#fff;
+  font:600 13.5px/1 var(--sans);letter-spacing:.002em;
+  border-radius:var(--r);cursor:pointer;white-space:nowrap;
+  box-shadow:var(--lift);
+  transition:background .14s,border-color .14s,box-shadow .14s,transform .06s;
+}
+button.btn:hover{background:var(--blue-dk);border-color:var(--blue-dk)}
+button.btn:active{background:var(--blue-dkr);border-color:var(--blue-dkr);box-shadow:none;transform:translateY(1px)}
+
+/* plain: the default rank. Most buttons on a page should be this. */
+button.btn.ghost{
+  background:var(--surface);border-color:var(--line-strong);color:var(--tx);font-weight:500;
+}
+button.btn.ghost:hover{background:var(--band);border-color:#adb8c2}
+button.btn.ghost:active{background:#e7edf2}
+
+/* danger: voiding, disconnecting, anything that cannot be taken back */
+button.btn.danger{background:var(--surface);border-color:#e3b4b4;color:var(--bad-tx);font-weight:500}
+button.btn.danger:hover{background:var(--bad-bg);border-color:var(--bad);color:var(--bad-tx)}
+button.btn.danger:active{background:#f6dcdc}
+
+/* link: an action that reads as text, for tertiary choices in a row of controls */
+button.btn.link{
+  background:transparent;border-color:transparent;color:var(--blue);
+  font-weight:500;padding:0 6px;box-shadow:none;
+}
+button.btn.link:hover{background:var(--blue-tint);color:var(--blue-dk)}
+
+button.btn.sm{height:var(--h-sm);padding:0 11px;font-size:12.5px;gap:5px}
+button.btn.wide{width:100%}
+
+button.btn:disabled,
+button.btn:disabled:hover{
+  background:#eef1f4;border-color:#e2e7ec;color:#a3aeb9;
+  cursor:not-allowed;box-shadow:none;transform:none;
+}
+button.btn.ghost:disabled,
+button.btn.ghost:disabled:hover{background:var(--surface-2);color:#a3aeb9}
+
+/* a button waiting on the network says so rather than looking dead */
+button.btn[aria-busy="true"]{cursor:progress;opacity:.75}
+
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+/* ------------------------------------------------------------------ inputs */
+
+select,input[type=text],input[type=number],input[type=month],input[type=date],
+input[type=email],input[type=password],textarea{
+  height:var(--h);
+  background:var(--surface);border:1px solid var(--line-strong);color:var(--tx);
+  border-radius:var(--r);padding:0 10px;font:400 13.5px var(--sans);max-width:100%;
+  transition:border-color .14s,box-shadow .14s;
+}
+textarea{height:auto;padding:8px 10px;line-height:1.5}
+select:hover,input:hover:not(:disabled){border-color:#adb8c2}
+select:focus,input:focus,textarea:focus{
+  outline:0;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-ring);
+}
+input[type=number],input[type=date],input[type=month]{font-variant-numeric:tabular-nums}
+input::placeholder{color:var(--tx3)}
+input.tiny{width:92px}
+input:disabled,select:disabled{background:var(--surface-2);color:var(--tx3);cursor:not-allowed}
+
+/* a select should not look like a text box it is not */
+select{
+  appearance:none;padding-right:30px;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235b6b7c' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;
+}
+/* inside a dense table the controls shrink to fit the row */
+td select,td input[type=text]{height:30px;font-size:13px}
+
+input[type=checkbox]{
+  width:16px;height:16px;accent-color:var(--blue);cursor:pointer;margin:0;vertical-align:-2px;
+}
+
+/* ------------------------------------------------------------------- upload */
+
+.drop{
+  border:1.5px dashed var(--line-strong);border-radius:var(--r-lg);
+  padding:48px 22px;text-align:center;color:var(--tx2);cursor:pointer;background:var(--surface-2);
+  transition:border-color .16s,background .16s,color .16s;
+}
+.drop:hover,.drop.hot{border-color:var(--blue);background:var(--blue-tint);color:var(--tx)}
+.drop b{display:block;font:600 16px/1.3 var(--sans);color:var(--tx);margin-bottom:6px}
+
+/* ------------------------------------------------------------------- tables */
+
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{
+  text-align:left;color:var(--tx2);font:600 11px var(--sans);
+  text-transform:uppercase;letter-spacing:.05em;
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
+  position:sticky;top:0;z-index:2;background:var(--band);
+}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+tbody tr:last-child td,table tr:last-child td{border-bottom:0}
+tr:hover td{background:var(--surface-2)}
+/* Xero prints amounts in the text face, tabular and right-aligned */
+.num{
+  text-align:right;font-family:var(--num);font-variant-numeric:tabular-nums;
+  white-space:nowrap;font-feature-settings:"tnum" 1;
+}
+th.num{text-align:right}
+.scroll{max-height:470px;overflow:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+.scroll::-webkit-scrollbar{width:11px;height:11px}
+.scroll::-webkit-scrollbar-thumb{background:#c9d4dd;border-radius:8px;border:3px solid var(--surface)}
+.scroll::-webkit-scrollbar-thumb:hover{background:#adbcc9}
+
+/* --------------------------------------------------------------- indicators */
+
+.chip{
+  display:inline-flex;align-items:center;gap:6px;height:var(--h-sm);
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:14px;padding:0 12px;font-size:12.5px;margin:0 7px 7px 0;color:var(--tx2);
+}
+.chip b{font-variant-numeric:tabular-nums;color:var(--tx)}
+.chip.ok{border-color:#00a99d66;background:var(--ok-bg);color:var(--ok-tx)}
+.chip.ok b{color:var(--ok-tx)}
+.chip.warn{border-color:#e8a33d66;background:var(--warn-bg);color:var(--warn-tx)}
+.chip.warn b{color:var(--warn-tx)}
+.chip.bad{border-color:#d6454566;background:var(--bad-bg);color:var(--bad-tx)}
+.chip.bad b{color:var(--bad-tx)}
+
+.badge{
+  display:inline-block;padding:2px 8px;border-radius:3px;
+  font:600 11px/1.45 var(--sans);background:#eef2f5;color:var(--tx2);
+}
+.badge.bad{background:var(--bad-bg);color:var(--bad-tx)}
+.badge.warn{background:var(--warn-bg);color:var(--warn-tx)}
+.badge.ok{background:var(--ok-bg);color:var(--ok-tx)}
+.badge.info{background:var(--blue-tint);color:var(--blue-dk)}
+
+.st{
+  display:inline-block;padding:3px 9px;border-radius:3px;
+  font:700 10px/1.4 var(--sans);text-transform:uppercase;letter-spacing:.06em;
+}
+.st.draft{background:var(--warn-bg);color:var(--warn-tx)}
+.st.final{background:var(--ok-bg);color:var(--ok-tx)}
+.st.void{background:var(--bad-bg);color:var(--bad-tx)}
+
+.ro{
+  display:inline-block;padding:2px 7px;border-radius:3px;
+  font:700 9px/1.5 var(--sans);letter-spacing:.08em;text-transform:uppercase;
+}
+.ro.admin{background:var(--blue-tint);color:var(--blue-dk)}
+.ro.staff{background:#13b5ea1f;color:#0b7ea3}
+.ro.viewer{background:#eef2f5;color:var(--tx2)}
+.ro.pending{background:var(--warn-bg);color:var(--warn-tx)}
+
+.note{
+  border-left:3px solid var(--blue);background:var(--blue-tint);
+  padding:11px 15px;border-radius:0 var(--r) var(--r) 0;
+  font-size:12.5px;line-height:1.6;color:var(--tx2);margin:14px 0;
+}
+.note.warn{border-color:var(--warn);background:#fdf6ea}
+.note b{color:var(--tx);font-weight:600}
+
+/* ------------------------------------------------------------------- layout */
+
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(206px,1fr))}
+
+/* ------------------------------------------------------------ league table */
+
+/* Each row is drawn against the LEADER, not against the total: the question is
+   "who is biggest", and the eye compares two lengths far better than it compares
+   two percentages. The percentage of total is still printed, for the answer the
+   bar cannot give. */
+.league td{vertical-align:top}
+.league .rank{
+  font:600 12px var(--num);color:var(--tx3);width:26px;
+  font-variant-numeric:tabular-nums;padding-top:12px;
+}
+.bar{
+  margin-top:6px;height:5px;border-radius:3px;background:var(--band);
+  overflow:hidden;max-width:340px;
+}
+.bar i{display:block;height:100%;background:var(--cyan);border-radius:3px}
+.league tr:first-child .bar i,.league tbody tr:nth-child(2) .bar i{background:var(--blue)}
+
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px 14px}
+.kpi .l{font:600 11px var(--sans);color:var(--tx3);text-transform:uppercase;letter-spacing:.06em}
+.kpi .v{
+  font:600 23px/1.15 var(--num);font-variant-numeric:tabular-nums;
+  margin-top:5px;letter-spacing:-.01em;color:var(--tx);
+}
+.kpi.accent{border-color:#0077c84d;background:var(--blue-tint)}
+.kpi.accent .v{color:var(--blue-dk)}
+/* a settings field is a kpi with a control in it */
+.kpi input,.kpi select{margin-top:2px}
+label.kpi{cursor:pointer}
+label.kpi:hover{border-color:var(--line-strong)}
+
+/* the settlement extract, set the way the printed statement is */
+.recon{width:100%;font-size:13.5px}
+.recon td{padding:6px 0;border:0;color:var(--tx2)}
+.recon td.num{font-family:var(--num);font-variant-numeric:tabular-nums;color:var(--tx)}
+.recon tr.sub td{border-top:1px solid var(--line);font-weight:600;padding-top:8px;color:var(--tx)}
+.recon tr.tot td{
+  border-top:2px solid var(--tx);border-bottom:3px double var(--tx);
+  font-weight:700;font-size:16px;color:var(--tx);padding:9px 0;
+}
+.recon tr.tot td:first-child{font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+.recon .neg{color:var(--bad)}
+
+.stack{display:flex;flex-direction:column;gap:2px}
+.mut{color:var(--tx3);font-size:11.5px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.94em}
+
+details{border-top:1px solid var(--rule);margin-top:10px}
+details>summary{
+  cursor:pointer;color:var(--blue);font-size:12.5px;padding:9px 0;user-select:none;
+  font-weight:500;list-style:none;
+}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:'▸ ';display:inline-block;transition:transform .15s}
+details[open]>summary::before{content:'▾ '}
+details>summary:hover{color:var(--blue-dk)}
+
+/* -------------------------------------------------------------------- toast */
+
+#toast{position:fixed;right:20px;bottom:20px;z-index:99;display:flex;flex-direction:column;gap:9px}
+#toast div{
+  background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--blue);
+  padding:12px 16px;border-radius:var(--r);font-size:13px;line-height:1.5;
+  box-shadow:var(--shadow-lg);max-width:420px;color:var(--tx);
+  animation:slidein .22s ease both;
+}
+@keyframes slidein{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+#toast div.ok{border-left-color:var(--ok)}
+#toast div.bad{border-left-color:var(--bad)}
+
+/* ------------------------------------------------------------ progress rail */
+
+.steps{display:flex;gap:0;margin-bottom:20px;flex-wrap:wrap}
+.steps div{
+  flex:1;min-width:156px;padding:11px 15px;position:relative;
+  background:var(--surface);border:1px solid var(--line);border-right:0;
+  font-size:12px;color:var(--tx3);
+}
+.steps div:first-child{border-radius:var(--r) 0 0 var(--r)}
+.steps div:last-child{border-right:1px solid var(--line);border-radius:0 var(--r) var(--r) 0}
+.steps b{
+  display:block;font:600 11px var(--sans);text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:2px;color:var(--tx2);
+}
+.steps div.done{color:var(--ok-tx);background:var(--ok-bg)}
+.steps div.done b{color:var(--ok-tx)}
+.steps div.now{background:var(--blue-tint);border-color:#0077c84d}
+.steps div.now b{color:var(--blue-dk)}
+.steps div.now::after{content:'';position:absolute;left:-1px;right:-1px;top:-1px;height:3px;background:var(--cyan)}
+
+/* ------------------------------------------------------------- write access */
+
+.ro-only{display:none}
+body.can-write .ro-only{display:inline-flex}
+body.readonly input,body.readonly select,body.readonly textarea{pointer-events:none;opacity:.6}
+
+@media (max-width:720px){
+  .wrap,.hd,.tb{padding-left:15px;padding-right:15px}
+  .tb{padding-top:10px;padding-bottom:10px}
+  .tbr{margin-left:0;width:100%}
+  nav{order:3;width:100%;margin-top:4px}
+  nav button{padding:9px 11px}
+  nav button::after{left:4px;right:4px}
+  .hd h1{font-size:20px}
+  .card{padding:16px}
+  .kpi .v{font-size:20px}
+  button.btn{padding:0 13px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+
+/* ===================================================== the Xero page pattern
+
+   Xero states the page, puts its actions on the same line at the right, and
+   then gives you panels. Every panel opens with a titled band and closes, when
+   it has something to do, with a footer of buttons. Copying that shape is the
+   whole point: the operator moves between the two applications all day, and a
+   layout they already read fluently costs them nothing to learn here.        */
+
+.hd .actions{margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+
+/* a titled band, so a panel announces itself the way a Xero panel does */
+.card>h2{
+  font-size:15px;font-weight:600;margin:-2px -18px 14px;padding:0 18px 12px;
+  border-bottom:1px solid var(--rule);
+}
+.card>h2+.hint{margin-top:-6px}
+
+/* card footer: the actions belong to the panel, not to the page */
+.cardfoot{
+  margin:16px -18px -16px;padding:13px 18px;border-top:1px solid var(--rule);
+  background:var(--surface-2);border-radius:0 0 var(--r) var(--r);
+  display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+}
+.cardfoot .mut{margin-left:auto}
+
+/* ------------------------------------------------- business-overview cards */
+
+/* The dashboard tile: title and a kebab, a pair of figures reading as one
+   sentence, room for a chart, then the actions. Same anatomy as the cards on
+   Xero's own home page. */
+.xgrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.xcard{
+  background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.xcard>.xh{
+  display:flex;align-items:center;gap:10px;padding:15px 18px 0;
+}
+.xcard>.xh h3{font-size:15px;font-weight:600;letter-spacing:-.005em}
+.xcard>.xh .kebab{
+  margin-left:auto;color:var(--tx3);font-size:17px;line-height:1;
+  letter-spacing:1px;user-select:none;
+}
+.xcard>.xb{padding:14px 18px 18px;flex:1}
+.xcard>.xf{
+  border-top:1px solid var(--rule);padding:12px 18px;
+  display:flex;gap:9px;flex-wrap:wrap;
+}
+
+/* two figures side by side, divided, each with its caption underneath */
+.figs{display:flex;gap:0;align-items:stretch}
+.figs>div{flex:1;padding-right:18px}
+.figs>div+div{border-left:1px solid var(--rule);padding-left:18px;padding-right:0}
+.fig{
+  font:600 26px/1.15 var(--sans);color:var(--tx);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+}
+.fig.sm{font-size:20px}
+.figcap{color:var(--blue);font-size:12.5px;margin-top:5px}
+.figcap.plain{color:var(--tx3)}
+
+/* an empty panel should say what would fill it, centred, the way Xero does */
+.empty{text-align:center;padding:34px 18px;color:var(--tx2)}
+.empty b{display:block;color:var(--tx);font-size:14px;margin-bottom:6px;font-weight:600}
+.empty p{font-size:12.5px;line-height:1.65;max-width:46ch;margin:0 auto}
+
+/* the ranked list inside a tile: name, bar, figure - no table furniture */
+.ranks{display:flex;flex-direction:column;gap:11px}
+.rankrow{display:grid;grid-template-columns:20px 1fr auto;gap:11px;align-items:baseline}
+.rankrow .n{font:600 11.5px var(--num);color:var(--tx3);font-variant-numeric:tabular-nums}
+.rankrow .nm{font-size:13px;color:var(--tx);line-height:1.3}
+.rankrow .nm small{display:block;color:var(--tx3);font-size:11px;margin-top:1px}
+.rankrow .amt{font:600 13px var(--sans);font-variant-numeric:tabular-nums;text-align:right}
+.rankrow .amt small{display:block;color:var(--tx3);font-weight:400;font-size:11px}
+.rankrow .bar{margin-top:5px;max-width:none}
