@@ -480,23 +480,28 @@ details>summary:hover{color:var(--blue-dk)}
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
   padding:16px 8px 15px;
 }
+/* The markers get a row of their own above the labels. The first attempt put
+   the dot, the connector and the text on one line, and since the connector has
+   to span the full column it ran straight through "1 - IMPORT" like a strike.
+   A stepper reads top-to-bottom: the rail, then what each stop is called. */
 .steps div{
-  flex:1;min-width:150px;position:relative;padding:0 14px 0 34px;
+  flex:1;min-width:150px;position:relative;padding:24px 16px 0 0;
   font-size:12px;color:var(--tx3);line-height:1.45;
 }
 .steps b{
   display:block;font:600 11px var(--sans);text-transform:uppercase;
   letter-spacing:.06em;margin-bottom:3px;color:var(--tx2);
 }
-/* the dot */
+/* the dot, top left of its column */
 .steps div::before{
-  content:'';position:absolute;left:12px;top:2px;width:11px;height:11px;border-radius:50%;
-  background:var(--surface);border:2px solid var(--line-strong);
+  content:'';position:absolute;left:0;top:0;width:12px;height:12px;border-radius:50%;
+  background:var(--surface);border:2px solid var(--line-strong);z-index:1;
   transition:background .18s,border-color .18s,box-shadow .18s;
 }
-/* the rail, drawn from this dot to the next one */
+/* the rail, from just past this dot to just before the next - centred on the
+   dot, which sits 6px down, so a 2px line starts at 5px */
 .steps div::after{
-  content:'';position:absolute;left:28px;right:-6px;top:7px;height:2px;
+  content:'';position:absolute;left:18px;right:8px;top:5px;height:2px;
   background:var(--line);transition:background .18s;
 }
 .steps div:last-child::after{display:none}
