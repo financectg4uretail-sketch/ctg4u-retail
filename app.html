@@ -83,8 +83,9 @@
       <option value="ytd">This year to date</option>
       <option value="one">The selected period only</option>
     </select>
-    <div class="spacer"></div>
-    <button class="btn sm ghost" onclick="renderDash()">Refresh</button>
+    <!-- Refresh lives in the page header with the other page actions. Two
+         buttons doing the same thing a hand's width apart is not a convenience;
+         it makes the reader stop and work out whether they differ. -->
   </div>
   <div id="dashBody"><div class="card"><span class="mut">Loading…</span></div></div>
 </section>
@@ -261,6 +262,36 @@
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
+
+/* Am I the page that was last published?
+ *
+ * GitHub Pages sends Cache-Control: max-age=600 on HTML and ignores _headers,
+ * so after a deploy a returning browser can keep serving the previous page for
+ * ten minutes. The assets are hash-stamped, so what it serves is at least
+ * internally consistent - but a consistent old page is indistinguishable from
+ * "the change was never made", which has now cost three rounds of confusion.
+ *
+ * version.json is fetched with cache: no-store, which the CDN cannot override.
+ * If it names a different build, reload once.
+ *
+ * Once, and only once. A reload that can retry is a reload that can loop, and a
+ * loop here would lock the operator out of a billing system - far worse than
+ * seeing yesterday's page. So the attempt is recorded in sessionStorage before
+ * navigating, and a failure to fetch is simply ignored: offline is not stale. */
+(function () {
+  var MINE = 'e0017d568909';
+  if (MINE.indexOf('__') === 0) return;            // running from source, not a build
+  try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
+  fetch('version.json', { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (v) {
+      if (!v || !v.build || v.build === MINE) return;
+      try { sessionStorage.setItem('build-reloaded', MINE); } catch (e) { return; }
+      location.replace(location.pathname + '?b=' + v.build);
+    })
+    .catch(function () { /* offline, or the file is not there: leave the page alone */ });
+})();
+
 var ME = null;                 // the signed-in app_users row
 var CAN_WRITE = false;
 
