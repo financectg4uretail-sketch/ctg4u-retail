@@ -732,3 +732,44 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 .imkey i.a{background:var(--blue)}
 .imkey i.b{background:var(--cyan)}
 .imkey i.c{background:#9ed8f2}
+
+/* --------------------------------------------------- the commercial panels */
+
+/* A rate that has crossed into "the brand owner will notice" gets the warning
+   colour. It is a threshold, not a gradient: either it is worth a conversation
+   or it is not. */
+.rankrow .bar i.hot{background:var(--warn)}
+.rankrow .amt.hot{color:var(--warn-tx)}
+
+.note.bad{
+  border-left:3px solid var(--bad);background:var(--bad-bg);
+  padding:14px 16px;border-radius:0 var(--r) var(--r) 0;font-size:13px;line-height:1.6;
+}
+.note.bad b{color:var(--bad-tx)}
+
+/* ------------------------------------------------------------- sparklines */
+
+/* Each line on its own scale, so a small project falling away reads as loudly
+   as a large one. The absolute size is the figure beside it, not the height. */
+.spks{display:flex;flex-direction:column;gap:2px}
+.spk{
+  display:grid;grid-template-columns:1fr 132px 76px;gap:12px;align-items:center;
+  padding:6px 0;border-bottom:1px solid var(--rule);color:var(--tx3);
+}
+.spk:last-child{border-bottom:0}
+.spk .nm{
+  font-size:12.5px;color:var(--tx);line-height:1.25;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.spk svg{display:block;width:100%;height:34px;overflow:visible}
+.spk .v{
+  font:600 12.5px var(--sans);font-variant-numeric:tabular-nums;
+  text-align:right;color:var(--tx);
+}
+.spk.up{color:var(--ok)}
+.spk.dn{color:var(--bad)}
+.spk.flat{color:var(--tx3)}
+
+@media (max-width:560px){
+  .spk{grid-template-columns:1fr 88px 62px;gap:8px}
+}

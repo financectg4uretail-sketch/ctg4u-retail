@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=9b4a83e458">
+<link rel="stylesheet" href="assets/app.css?v=ce453e4df3">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'e0017d568909';
+  var MINE = '4137291bb7d6';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -867,6 +867,189 @@ function renderIncomeMix(d) {
     '</div>', '');
 }
 
+/* --------------------------------------------------- the commercial picture */
+
+/* Everything above this point measures size. These four measure whether the
+ * arrangement is working. */
+
+/* ---- 1. effective take rate, and settlements the charges have eaten ---------
+ *
+ * The RM75 is flat and the 3.8% and 0.8% scale, so a project spread thin across
+ * many pharmacies pays a far higher effective rate than a concentrated one -
+ * five times higher is not unusual. That gap is invisible in any sales ranking,
+ * and it is the conversation a brand owner eventually opens. */
+function renderTakeRate(d) {
+  var rows = (d.byProject || []).filter(function (p) { return Number(p.gross) > 0; });
+  if (!rows.length) return '';
+
+  var byRate = rows.slice().sort(function (a, b) { return Number(b.takeRate) - Number(a.takeRate); });
+  var max = Math.max.apply(null, [1].concat(byRate.map(function (p) { return Number(p.takeRate) || 0; })));
+
+  /* Thin and negative are the same problem at different depths, so they share a
+     list: what is left for the brand owner once the charges come off. */
+  var strained = rows.filter(function (p) {
+    var net = Number(p.netSales) || 0, pay = Number(p.payout);
+    return pay <= 0 || (net > 0 && pay / net < 0.5);
+  }).sort(function (a, b) { return Number(a.payout) - Number(b.payout); });
+
+  var body = '<div class="ranks">' + byRate.slice(0, 8).map(function (p) {
+    var r = Number(p.takeRate) || 0;
+    var hot = r >= 20;
+    return '<div class="rankrow" title="' + esc(p.code) + ' — ' + p.shops +
+      ' pharmacy(s), gross ' + M(p.gross) + ', CTG4U income ' + M(p.income) + '">' +
+      '<span class="n">' + p.shops + '</span>' +
+      '<span class="nm">' + esc(p.name) +
+        '<span class="bar"><i class="' + (hot ? 'hot' : '') +
+        '" style="width:' + (r / max * 100).toFixed(1) + '%"></i></span></span>' +
+      '<span class="amt' + (hot ? ' hot' : '') + '">' + r.toFixed(1) + '%</span>' +
+      '</div>';
+  }).join('') + '</div>' +
+  '<div class="hint" style="margin-top:14px">The number on the left is how many pharmacies that ' +
+  'project is placed in. Wide placement with modest sales is what drives the rate up: the ' +
+  'management fee is charged per pharmacy whether that shop sold much or little.</div>';
+
+  if (strained.length) {
+    body += '<div class="note ' + (strained.some(function (p) { return Number(p.payout) <= 0; }) ? 'bad' : 'warn') +
+      '" style="margin-top:16px"><b>' + strained.length +
+      ' project(s) keep less than half of what was collected</b>' +
+      '<div class="scroll" style="max-height:190px;margin-top:9px"><table>' +
+      '<tr><th>Project</th><th class="num">Shops</th><th class="num">Collected</th>' +
+      '<th class="num">Charges</th><th class="num">Left for them</th></tr>' +
+      strained.slice(0, 15).map(function (p) {
+        var neg = Number(p.payout) <= 0;
+        return '<tr><td>' + esc(p.name) + '</td>' +
+          '<td class="num">' + p.shops + '</td>' +
+          '<td class="num">' + M(p.netSales) + '</td>' +
+          '<td class="num">' + M(Number(p.income) + Number(p.sst || 0)) + '</td>' +
+          '<td class="num"' + (neg ? ' style="color:var(--bad-tx);font-weight:600"' : '') + '>' +
+          M(p.payout) + '</td></tr>';
+      }).join('') + '</table></div>' +
+      '<div style="margin-top:9px">A negative figure means the brand owner owes CTG4U for the ' +
+      'month rather than the other way round. That happens honestly &mdash; stock placed widely ' +
+      'and moving slowly &mdash; but it is a conversation to open rather than to receive.</div>' +
+      '</div>';
+  }
+
+  return xcard('What each project effectively pays', body,
+    '<button class="btn ghost sm" onclick="go(&#39;settle&#39;)">Settlement</button>');
+}
+
+/* ---- 2. how much of a project rests on one shop ---------------------------- */
+function renderConcentration(d) {
+  var rows = (d.byProject || [])
+    .filter(function (p) { return Number(p.gross) > 0 && p.topShare != null && p.shops > 0; })
+    .sort(function (a, b) { return Number(b.topShare) - Number(a.topShare); });
+  if (!rows.length) return '';
+
+  var single = rows.filter(function (p) { return p.shops === 1; }).length;
+
+  return xcard('How much of a project rests on one shop',
+    '<div class="hint" style="margin-bottom:14px">The share of a project&rsquo;s sales coming from ' +
+    'its single largest pharmacy. A project at 100% is one closure away from nothing.</div>' +
+    '<div class="ranks">' + rows.slice(0, 8).map(function (p) {
+      var s = Number(p.topShare);
+      var risky = s >= 70;
+      return '<div class="rankrow" title="' + esc(p.code) + ' — across ' + p.shops + ' pharmacy(s)">' +
+        '<span class="n">' + p.shops + '</span>' +
+        '<span class="nm">' + esc(p.name) +
+          '<span class="bar"><i class="' + (risky ? 'hot' : '') +
+          '" style="width:' + s.toFixed(1) + '%"></i></span></span>' +
+        '<span class="amt' + (risky ? ' hot' : '') + '">' + s.toFixed(0) + '%</span>' +
+        '</div>';
+    }).join('') + '</div>' +
+    (single ? '<div class="note warn" style="margin-top:16px"><b>' + single +
+      ' project(s) sell through a single pharmacy.</b> Nothing is wrong with that while it works; ' +
+      'it is worth knowing that the month goes to zero if that one shop stops.</div>' : ''),
+    '<button class="btn ghost sm" onclick="go(&#39;master&#39;)">Brand owners</button>');
+}
+
+/* ---- 3. what a pharmacy is worth to CTG4U ----------------------------------
+ *
+ * A different ranking from what it sells, and the difference is the point: five
+ * brands in a quiet shop earns RM375 of management fee, one brand in a busy shop
+ * earns RM75. */
+function renderPharmacyValue(d) {
+  var rows = (d.byPharmacy || [])
+    .filter(function (p) { return p.ctgIncome != null; })
+    .sort(function (a, b) { return Number(b.ctgIncome) - Number(a.ctgIncome); });
+  if (!rows.length) return '';
+
+  var max = Math.max.apply(null, [1].concat(rows.map(function (p) { return Number(p.ctgIncome); })));
+  var bySales = (d.byPharmacy || []).slice(0, 5).map(function (p) { return p.code; });
+  var byValue = rows.slice(0, 5).map(function (p) { return p.code; });
+  var differs = byValue.filter(function (c) { return bySales.indexOf(c) < 0; }).length;
+
+  return xcard('What each pharmacy earns CTG4U',
+    '<div class="hint" style="margin-bottom:14px">Management fee plus that shop&rsquo;s share of the ' +
+    'percentage charges. The number on the left is how many brands it carries &mdash; the fee is ' +
+    'charged once per brand, so breadth pays as well as volume.</div>' +
+    '<div class="ranks">' + rows.slice(0, 8).map(function (p) {
+      return '<div class="rankrow" title="' + esc(p.code) + ' — sold ' + M(p.gross) +
+        ' across ' + p.projects + ' brand(s)">' +
+        '<span class="n">' + p.projects + '</span>' +
+        '<span class="nm">' + esc(p.name) +
+          '<small>' + esc(p.town || p.state || '') + '</small>' +
+          '<span class="bar"><i style="width:' +
+          (Number(p.ctgIncome) / max * 100).toFixed(1) + '%"></i></span></span>' +
+        '<span class="amt">' + M(p.ctgIncome) + '</span>' +
+        '</div>';
+    }).join('') + '</div>' +
+    (differs ? '<div class="note" style="margin-top:16px"><b>' + differs +
+      ' of the top five here do not appear in the top five by sales.</b> Which shops are worth the ' +
+      'effort is not the same question as which shops sell the most.</div>' : ''),
+    '<button class="btn ghost sm" onclick="go(&#39;master&#39;)">Pharmacies</button>');
+}
+
+/* ---- 4. every project's shape, at once -------------------------------------
+ *
+ * One line each, drawn on its own scale so a small project's collapse is as
+ * visible as a large one's. The figure beside it carries the absolute size,
+ * which the shared-scale version would have shown instead of the shape. */
+function renderProjectTrends(d) {
+  var rows = (d.projectTrend || []).filter(function (p) { return (p.points || []).length; });
+  if (!rows.length) return '';
+
+  var periods = (d.periods || []).length;
+  if (periods < 2) {
+    return xcard('Every project, month by month',
+      '<div class="empty"><b>Needs a few months</b>' +
+      '<p>A line through one point is a dot. Each project gets its own line here once ' +
+      'two or three months have been finalised &mdash; the shape is the whole value of it.</p></div>', '');
+  }
+
+  var W = 132, H = 34;
+  var spark = rows.slice(0, 12).map(function (p) {
+    var pts = p.points, n = pts.length;
+    var vals = pts.map(function (x) { return Number(x.gross) || 0; });
+    var hi = Math.max.apply(null, vals), lo = Math.min.apply(null, vals);
+    var span = (hi - lo) || 1;
+    var step = n > 1 ? W / (n - 1) : W;
+    var line = vals.map(function (v, i) {
+      return (i * step).toFixed(1) + ' ' + (H - ((v - lo) / span) * (H - 6) - 3).toFixed(1);
+    }).join(' L');
+    var last = vals[n - 1], first = vals[0];
+    var dir = last > first ? 'up' : last < first ? 'dn' : 'flat';
+    var lx = ((n - 1) * step).toFixed(1);
+    var ly = (H - ((last - lo) / span) * (H - 6) - 3).toFixed(1);
+    return '<div class="spk ' + dir + '" title="' + esc(p.code) + ' — ' +
+      pts.map(function (x) { return CB.periodLabel(x.period) + ' ' + M(x.gross); }).join(', ') + '">' +
+      '<span class="nm">' + esc(p.name) + '</span>' +
+      '<svg viewBox="0 0 ' + (W + 6) + ' ' + H + '" aria-hidden="true">' +
+        '<path d="M' + line + '" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+        'stroke-linejoin="round" stroke-linecap="round"/>' +
+        '<circle cx="' + lx + '" cy="' + ly + '" r="2.6" fill="currentColor"/>' +
+      '</svg>' +
+      '<span class="v">' + M2(last) + '</span></div>';
+  }).join('');
+
+  return xcard('Every project, month by month',
+    '<div class="hint" style="margin-bottom:14px">Each line is drawn on its own scale, so a small ' +
+    'project falling away is as visible as a large one. The figure is its latest month.</div>' +
+    '<div class="spks">' + spark + '</div>' +
+    (rows.length > 12 ? '<div class="mut" style="margin-top:12px">' + (rows.length - 12) +
+      ' more not shown</div>' : ''), '');
+}
+
 function renderDash() {
   var host = $('#dashBody');
   if (!host) return;
@@ -955,6 +1138,11 @@ function renderDash() {
     h += '</div>';
     h += '<div class="xgrid" style="margin-top:16px">' +
          renderMovers(d) + renderCoverage(d) + renderIncomeMix(d) + '</div>';
+    /* the commercial read comes last: size first, then whether the arrangement
+       is actually working */
+    h += '<div class="xgrid" style="margin-top:16px">' +
+         renderTakeRate(d) + renderConcentration(d) +
+         renderPharmacyValue(d) + renderProjectTrends(d) + '</div>';
     host.innerHTML = h;
   }, function (e) {
     host.innerHTML = '<div class="xcard"><div class="xb"><div class="note warn">' +
