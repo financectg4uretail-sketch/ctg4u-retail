@@ -161,6 +161,8 @@
               xeroContact: b.xero_contact, email: b.email || '',
               bankName: b.bank_name || '', bankAccountName: b.bank_account_name || '',
               bankAccountNo: b.bank_account_no || '',
+              address: b.address || '', phone: b.phone || '', taxNo: b.tax_no || '',
+              xeroSyncedAt: b.xero_synced_at || null,
               trackingOption: b.tracking_option || '', active: b.active
             };
           }),
@@ -204,6 +206,22 @@
         .then(function (r) { return rows(r, 'Import pharmacies'); });
     },
 
+    /* A brand owner's details as Xero holds them, written with the moment they
+     * were read. The statement prints the stored copy, not a live one: a
+     * document reprinted a year later has to show the details it was issued
+     * with, and printing must not depend on Xero being reachable. */
+    syncBrandOwnerFromXero: function (id, x) {
+      return sb.from('brand_owners').update({
+        email: x.email || null,
+        address: x.address || null,
+        phone: x.phone || null,
+        tax_no: x.taxNumber || null,
+        bank_account_no: x.bankAccountDetails || null,
+        xero_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }).eq('id', id).then(function (r) { fail('Save Xero details', r.error); return true; });
+    },
+
     saveBrandOwner: function (b) {
       var row = {
         code: b.code, name: b.name, xero_contact: b.xeroContact,
@@ -211,6 +229,7 @@
         bank_name: b.bankName || null,
         bank_account_name: b.bankAccountName || null,
         bank_account_no: b.bankAccountNo || null,
+        address: b.address || null, phone: b.phone || null, tax_no: b.taxNo || null,
         active: b.active !== false,
         updated_at: new Date().toISOString()
       };
@@ -444,6 +463,10 @@
       status: function () { return DB.xero.call('status').then(function (r) { return r.status; }); },
       connect: function () { return DB.xero.call('connect').then(function (r) { return r.url; }); },
       disconnect: function () { return DB.xero.call('disconnect'); },
+      /* The organisation's own registered details, for the head of a statement.
+         Read rather than retyped: Xero already holds them, and two copies of
+         one fact eventually give two answers. */
+      org: function () { return DB.xero.call('org').then(function (r) { return r.org; }); },
       /* Safe to call twice: documents already carrying a Xero invoice id are
        * skipped by the server, not re-sent. */
       post: function (runId) {

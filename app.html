@@ -144,9 +144,12 @@
 
   <div class="card">
     <h2>Brand owners</h2>
-    <div class="hint">Who the goods belong to. Each one gets its own statement, its own fee invoice and its own payout bill.</div>
+    <div class="hint">Who the goods belong to. Each one gets its own statement, its own fee invoice and its own payout bill.
+      The address, tax number and bank account below are printed on the statement &mdash; pull them from the Xero
+      contact rather than typing them twice.</div>
     <div class="scroll"><table id="tblProjects"></table></div>
     <div class="row" style="margin-top:12px">
+      <button class="btn sm ro-only" onclick="pullBrandOwnerDetails()">⭳ Pull details from Xero</button>
       <button class="btn sm" onclick="addProject()">+ Add brand owner</button>
       <button class="btn sm ghost" onclick="exportMaster()">⬇ Export master (xlsx)</button>
       <button class="btn sm ghost" onclick="importMasterPick()">⬆ Import master (xlsx)</button>
@@ -201,6 +204,11 @@
     <div class="hint">Printed at the top of every settlement statement, which is a document that leaves
       the building. A brand owner reading it should be able to tell who it is from and where to write
       back without asking. Blank lines are simply left out.</div>
+    <div class="row ro-only" style="margin-bottom:12px">
+      <button class="btn sm" onclick="pullOrg()">⭳ Fill these from Xero</button>
+      <span class="mut">Reads the registered name, company number, tax number and address off the
+        connected organisation, so they are not held in two places.</span>
+    </div>
     <div class="grid g3" id="cfgCompany"></div>
   </div>
   <div class="card">
@@ -263,9 +271,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=e1ffedcf0e"></script>
+<script src="assets/db.js?v=d8d49ff4fd"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=33ba2038f3"></script>
+<script src="assets/calc.js?v=4d2c9b2ee7"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -286,7 +294,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '199332425911';
+  var MINE = '174d4dbcaae0';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2607,6 +2615,71 @@ $('#fileMaster').onchange = function (e) {
   r.readAsArrayBuffer(f);
   e.target.value = '';
 };
+
+/* ------------------------------------------------------ details from Xero */
+
+/* Xero holds the registered name, the company number and the address already.
+ * Reading them beats retyping them, and it beats keeping a second copy that
+ * drifts. Stored once here rather than read on every print: a statement is a
+ * document that gets kept, so reprinting it must not depend on Xero being up,
+ * and must not quietly show an address that changed since. */
+function pullOrg() {
+  if (!requireWrite()) return;
+  toast('Reading the organisation from Xero…');
+  DB.xero.org().then(function (o) {
+    var before = JSON.stringify([ST.cfg.coName, ST.cfg.coReg, ST.cfg.coSst, ST.cfg.coAddress]);
+    if (o.name) ST.cfg.coName = o.name;
+    if (o.registrationNumber) ST.cfg.coReg = o.registrationNumber;
+    if (o.taxNumber) ST.cfg.coSst = o.taxNumber;
+    if (o.address) ST.cfg.coAddress = o.address;
+    if (o.phone) ST.cfg.coPhone = o.phone;
+    save(); renderCfg(); recompute();
+    var after = JSON.stringify([ST.cfg.coName, ST.cfg.coReg, ST.cfg.coSst, ST.cfg.coAddress]);
+    /* Naming what is still blank is the useful part: Xero does not always
+       carry a registration number, and a silent success would leave the
+       operator believing the header is complete when it is not. */
+    var missing = [['coReg', 'company number'], ['coSst', 'tax number'],
+                   ['coAddress', 'address']]
+      .filter(function (k) { return !String(ST.cfg[k[0]] || '').trim(); })
+      .map(function (k) { return k[1]; });
+    toast(before === after ? 'Xero had nothing new to add'
+      : 'Filled from Xero' + (missing.length
+          ? ' — Xero has no ' + missing.join(' or ') + ', so type those in' : ''),
+      missing.length ? 'warn' : 'ok');
+  }).catch(function (e) { err(e); toast('Could not read Xero: ' + e.message, 'bad'); });
+}
+
+/* Every brand owner's contact detail, matched to the Xero contact each one is
+ * already linked to. The link is the xeroContact name, which is the same string
+ * the invoices are addressed with - so a brand owner whose statement shows the
+ * wrong address is one whose invoices were going to the wrong contact too. */
+function pullBrandOwnerDetails() {
+  if (!requireWrite()) return;
+  toast('Reading contacts from Xero…');
+  DB.xero.call('contacts').then(function (r) {
+    var byName = {};
+    (r.contacts || []).forEach(function (c) { byName[CB.normKey(c.name)] = c; });
+
+    var todo = ST.master.projects.filter(function (p) { return p.id; });
+    var hit = [], miss = [], noBank = [];
+    var chain = todo.reduce(function (prev, p) {
+      var x = byName[CB.normKey(p.xeroContact || p.name)];
+      if (!x) { miss.push(p.name); return prev; }
+      hit.push(p.name);
+      if (!x.bankAccountDetails) noBank.push(p.name);
+      return prev.then(function () { return DB.syncBrandOwnerFromXero(p.id, x); });
+    }, Promise.resolve());
+
+    return chain.then(refreshMaster).then(function () {
+      var msg = hit.length + ' of ' + todo.length + ' matched a Xero contact';
+      if (miss.length) msg += ' — no contact for ' + miss.slice(0, 3).join(', ') +
+        (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : '');
+      else if (noBank.length) msg += ' — ' + noBank.length +
+        ' have no bank account on the Xero contact';
+      toast(msg, miss.length ? 'warn' : 'ok');
+    });
+  }).catch(function (e) { err(e); toast('Could not read Xero: ' + e.message, 'bad'); });
+}
 
 /* =========================================================== SETTINGS */
 var CFG_FIELDS = {

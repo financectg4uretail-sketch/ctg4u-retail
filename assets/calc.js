@@ -948,6 +948,8 @@
     });
   }
 
+  var SPLIT_LINES = new RegExp('[' + String.fromCharCode(13, 10) + ']+');
+
   var STMT_CSS = [
     'body{font:12px/1.55 "Public Sans","Segoe UI",Arial,sans-serif;color:#1b2733;margin:0;background:#f4f7f9}',
     '.stmt{background:#fff;max-width:760px;margin:0 auto 24px;padding:34px 40px;page-break-after:always}',
@@ -957,53 +959,57 @@
        arrives with are always the same two: who is this from, and is my
        account right. */
     '.band{display:flex;justify-content:space-between;align-items:center;background:#0077c8;color:#fff;',
-    '  padding:13px 18px;margin:-34px -40px 22px;border-radius:2px}',
+    '  padding:10px 18px;margin:-34px -40px 16px;border-radius:2px}',
     '.bco{font-weight:800;font-size:14px;letter-spacing:.4px}',
     '.bti{font-size:12px;opacity:.92}',
     '.head{display:flex;justify-content:space-between;gap:34px;align-items:flex-start}',
     '.issuer{max-width:46%}',
     '.issuer .co{font-size:15px;font-weight:700}',
     '.issuer .reg{font-size:10px;color:#8494a5;margin-top:1px}',
-    '.issuer .addr{font-size:11px;color:#5b6b7c;margin-top:8px;line-height:1.5}',
+    '.issuer .addr{font-size:10.5px;color:#5b6b7c;margin-top:6px;line-height:1.45}',
     '.facts{flex:1;max-width:52%}',
-    '.facts .ref{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}',
-    '.facts .per{font-size:12px;color:#5b6b7c;margin-bottom:12px}',
-    '.kv div{display:flex;gap:8px;font-size:11px;line-height:1.75}',
-    '.kv span{flex:none;width:132px;color:#8494a5}',
+    '.facts .ref{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}',
+    '.facts .per{font-size:12px;color:#5b6b7c;margin-bottom:9px}',
+    '.kv div{display:flex;gap:8px;font-size:10.5px;line-height:1.6}',
+    '.kv span{flex:none;width:112px;color:#8494a5}',
     '.kv span:after{content:":"}',
     '.kv b{font-weight:600;color:#1b2733}',
     '.kv .warn{display:block;background:#fff6e5;border:1px solid #f0d5a0;color:#8a5a12;',
     '  padding:7px 9px;border-radius:3px;font-size:10px;line-height:1.5;margin-top:6px}',
-    '.lead{font-size:11.5px;color:#5b6b7c;margin:20px 0 4px;border-top:1px solid #e6ecf1;padding-top:14px}',
+    '.lead{font-size:11px;color:#8494a5;margin:14px 0 2px;border-top:1px solid #e6ecf1;padding-top:10px}',
     '.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0077c8;padding-bottom:12px}',
     '.co{font-size:17px;font-weight:800;letter-spacing:.3px}',
     '.ti{font-size:13px;color:#555;margin-top:2px}',
     '.meta{text-align:right;font-size:11px}',
     '.meta span{display:block;color:#8494a5;text-transform:uppercase;letter-spacing:.6px;font-size:9px}',
     '.meta div{margin-bottom:6px}',
-    '.to{margin:18px 0 16px}.to span{display:block;color:#888;text-transform:uppercase;letter-spacing:.6px;font-size:9px}',
+    '.to{margin:12px 0 12px}.to span{display:block;color:#888;text-transform:uppercase;letter-spacing:.6px;font-size:9px}',
     '.to b{font-size:15px}.to .sm{color:#888;font-size:10px}',
     'table{width:100%;border-collapse:collapse}',
-    '.dt th{background:#f1f5f8;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;',
+    '.dt th{background:#f1f5f8;text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;',
     '  color:#5b6b7c;padding:7px 8px;border-bottom:1px solid #d9e1e8}',
-    '.dt td{padding:6px 8px;border-bottom:1px solid #eee}',
+    '.dt td{padding:5px 8px;border-bottom:1px solid #eee}',
     '.dt tr.tt td{border-top:1.5px solid #333;border-bottom:0;font-weight:700;background:#fafafa}',
     '.n{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;white-space:nowrap}',
     /* The deductions and the payout are one argument and may not be split by a
        page break: at twenty to twenty-six pharmacies the summary straddled the
        boundary, which put TOTAL PAYOUT AMOUNT on a page of its own, away from
        the lines that arrive at it. Measured, not guessed. */
-    '.sm2{margin-top:22px;width:62%;margin-left:38%;break-inside:avoid;page-break-inside:avoid}',
-    '.sm2 td{padding:5px 0}.sm2 td.n{width:130px}',
+    '.sm2{margin-top:16px;width:62%;margin-left:38%;break-inside:avoid;page-break-inside:avoid;',
+    /* and not away from the footer either: keeping each whole but letting
+       them separate put a page carrying nothing but two signature lines
+       after a statement of twelve pharmacies. */
+    '  break-after:avoid;page-break-after:avoid}',
+    '.sm2 td{padding:4px 0}.sm2 td.n{width:130px}',
     '.sm2 tr.sub td{border-top:1px solid #ccc;font-weight:600}',
     '.sm2 tr.tot td{border-top:2px solid #1b2733;border-bottom:3px double #1b2733;font-weight:800;font-size:14px;padding:8px 0}',
     /* The signature block lives inside this, so keeping the footer whole keeps
        a signature line from being orphaned from the name above it. */
-    '.ft{margin-top:34px;font-size:10px;color:#666;border-top:1px solid #eee;padding-top:12px;',
+    '.ft{margin-top:20px;font-size:10px;color:#666;border-top:1px solid #eee;padding-top:10px;',
     '  break-inside:avoid;page-break-inside:avoid}',
-    '.sig{display:flex;gap:60px;margin-top:44px}',
+    '.sig{display:flex;gap:60px;margin-top:26px}',
     '.sig div{flex:1;font-size:10px;color:#666}',
-    '.sig span{display:block;border-top:1px solid #999;margin-top:38px}',
+    '.sig span{display:block;border-top:1px solid #999;margin-top:28px}',
     /* The page margin belongs to @page, not to the section's padding.
        Padding is applied once, at the top of the element - so on a statement
        that ran to a second page the table began flush against the paper edge,
@@ -1020,6 +1026,13 @@
 
   /* One brand owner's statement. Every figure comes off the settlement object,
    * so the statement and the Xero files can never tell different stories. */
+  /* An address is typed and pasted, so it arrives with whatever line endings
+   * the machine it came from uses. One place decides what a line is. */
+  function lines(v) {
+    return String(v == null ? '' : v).split(SPLIT_LINES)
+      .map(function (l) { return l.trim(); }).filter(Boolean);
+  }
+
   function statementHTML(P, c) {
     c = cfg(c);
     var sr = function (l, v, cls) {
@@ -1035,9 +1048,7 @@
     var kv = function (k, v) {
       return v ? '<div><span>' + k + '</span><b>' + esc(v) + '</b></div>' : '';
     };
-    var addr = String(c.coAddress || '').split(/[\r\n]+/)
-      .map(function (l) { return l.trim(); }).filter(Boolean)
-      .map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
+    var addr = lines(c.coAddress).map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
 
     /* Whose account the payout is going to. Printed so it can be checked
        BEFORE the money moves rather than chased afterwards, and marked plainly
@@ -1071,13 +1082,14 @@
           '<div class="kv">' +
             kv('Brand owner', P.project.name) +
             kv('Reference', P.code) +
+            (B.address ? '<div><span>Address</span><b>' +
+              lines(B.address).map(esc).join('<br>') + '</b></div>' : '') +
+            kv('Tax no.', B.taxNo) +
             bank +
           '</div>' +
         '</div>' +
       '</div>' +
 
-      '<div class="lead">Summary at a glance &mdash; what was sold through each pharmacy this ' +
-      'period, what was charged, and what is left to remit.</div>' +
 
       '<table class="dt"><thead><tr><th>Pharmacy</th><th class="n">Sales Amount</th>' +
       '<th class="n">Discount ' + r2(c.discountPct) + '%</th><th class="n">Net Sales</th>' +
