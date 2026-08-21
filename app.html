@@ -255,7 +255,7 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=df0a8e0b6d"></script>
+<script src="assets/db.js?v=c9d63e0a1c"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
 <script src="assets/calc.js?v=1ec068b8fe"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
@@ -565,7 +565,10 @@ function fanOut(pts) {
   return pts;
 }
 
-function renderMap(byPharmacy, byState) {
+/* `network` draws the same map with no sales behind it: every pharmacy the same
+ * size, no state shading, no leader. It is the picture of where the shops are,
+ * which is true before a single month has been billed. */
+function renderMap(byPharmacy, byState, network) {
   if (typeof MYMAP === 'undefined') return '';
   var GEO = MYMAP;
 
@@ -576,7 +579,7 @@ function renderMap(byPharmacy, byState) {
   });
   var maxState = Math.max.apply(null, [1].concat(Object.keys(stateTotal).map(function (k) { return stateTotal[k]; })));
   var maxPh = Math.max.apply(null, [1].concat((byPharmacy || []).map(function (p) { return Number(p.gross || 0); })));
-  var leader = (byPharmacy || [])[0];
+  var leader = network ? null : (byPharmacy || [])[0];
 
   var shapes = GEO.states.map(function (st) {
     var v = stateTotal[st.key] || 0;
@@ -610,11 +613,15 @@ function renderMap(byPharmacy, byState) {
 
   var dots = placed.map(function (s) {
     var g = Number(s.p.gross || 0);
-    var rad = 2.2 + 7.4 * Math.sqrt(g / maxPh);
+    /* With no sales behind them every dot is the same size. Scaling by sales
+       when every value is zero would draw sixty-two identical minimums and look
+       like a rendering fault rather than a network. */
+    var rad = network ? 3.6 : 2.2 + 7.4 * Math.sqrt(g / maxPh);
     var top = leader && s.p.code === leader.code;
     return '<circle class="spot' + (top ? ' top' : '') + '" cx="' + s.x.toFixed(1) +
       '" cy="' + s.y.toFixed(1) + '" r="' + rad.toFixed(1) + '">' +
-      '<title>' + esc(s.p.name) + ' (' + esc(s.p.code) + ')\n' + M(g) +
+      '<title>' + esc(s.p.name) + ' (' + esc(s.p.code) + ')' +
+      (network ? '' : '\n' + M(g)) +
       '\n' + esc(s.p.town || s.p.state || '') + '</title></circle>';
   }).join('');
 
@@ -625,17 +632,39 @@ function renderMap(byPharmacy, byState) {
       '<span class="amt">' + M(s.gross) + '</span></div>';
   }).join('');
 
-  return xcard('Where the sales come from',
+  /* the network view has no sales to rank, so the state list gives way to a
+     count of shops per state - still the useful thing to know about it */
+  if (network) {
+    var perState = {};
+    placed.forEach(function (s) {
+      var k = s.p.state || 'UNKNOWN';
+      perState[k] = (perState[k] || 0) + 1;
+    });
+    top5 = Object.keys(perState).sort(function (a, b) { return perState[b] - perState[a]; })
+      .slice(0, 5).map(function (k) {
+        return '<div class="mlrow"><span class="sw" style="opacity:.5"></span>' +
+          '<span class="nm">' + esc(k) + '</span>' +
+          '<span class="amt">' + perState[k] + '</span></div>';
+      }).join('');
+  }
+
+  return xcard(network ? 'Your pharmacy network' : 'Where the sales come from',
     '<div class="mapwrap"><svg class="mymap" viewBox="0 0 ' + GEO.width + ' ' + GEO.height + '" ' +
-      'role="img" aria-label="Map of Malaysia showing each pharmacy sized by its sales">' +
+      'role="img" aria-label="Map of Malaysia showing each pharmacy' +
+      (network ? '' : ' sized by its sales') + '">' +
       shapes + dots + '</svg></div>' +
     '<div class="maplegend">' +
       '<div class="mlist">' + top5 + '</div>' +
       '<div class="mnote">' +
-        (leader ? '<b>' + esc(leader.name) + '</b> leads on ' + M(leader.gross) +
-                  ', in ' + esc(leader.town || leader.state || 'an unknown town') + '. ' : '') +
-        'Each circle is one pharmacy, sized by its sales, placed at its town. ' +
-        'Pharmacies sharing a town are fanned apart so none is hidden behind another.' +
+        (network
+          ? '<b>' + placed.length + ' pharmacies</b> across ' +
+            Object.keys(placed.reduce(function (m, s) { m[s.p.state] = 1; return m; }, {})).length +
+            ' states. Every circle is one shop, at its town. Once a month is finalised the ' +
+            'circles resize by what each sold and the states shade by their share.'
+          : (leader ? '<b>' + esc(leader.name) + '</b> leads on ' + M(leader.gross) +
+                      ', in ' + esc(leader.town || leader.state || 'an unknown town') + '. ' : '') +
+            'Each circle is one pharmacy, sized by its sales, placed at its town. ' +
+            'Pharmacies sharing a town are fanned apart so none is hidden behind another.') +
         (noCoord ? ' <b>' + noCoord + ' without a coordinate</b> sit at the centre of their state.' : '') +
       '</div>' +
     '</div>', '');
@@ -823,11 +852,26 @@ function renderDash() {
     var ph = d.byPharmacy || [], pj = d.byProject || [];
 
     if (!d.runs) {
-      host.innerHTML = '<div class="xcard"><div class="xb"><div class="empty">' +
+      /* No sales yet does not mean nothing to show. Where the 62 pharmacies are
+       * is a fact about the network, not about a month, and hiding the map until
+       * the first run is finalised means the one thing that needs no data is the
+       * one thing you cannot see. Master data has the coordinates, so draw it. */
+      var known = (ST.master.pharmacies || []).filter(function (p) {
+        return p.active !== false && p.lat != null && p.lng != null;
+      }).map(function (p) {
+        return { code: p.code, name: p.trading || p.contact, state: p.state,
+                 town: p.town, lat: p.lat, lng: p.lng, gross: 0 };
+      });
+
+      host.innerHTML =
+        (known.length ? renderMap(known, [], true) : '') +
+        '<div class="xcard"' + (known.length ? ' style="margin-top:16px"' : '') + '>' +
+        '<div class="xb"><div class="empty">' +
         '<b>No finalised months yet</b>' +
-        '<p>This page counts <b>finalised</b> months only. A draft can still be rebuilt or ' +
-        'abandoned, so counting one would put figures here that were never invoiced.</p>' +
-        '</div></div><div class="xf">' +
+        '<p>The figures on this page count <b>finalised</b> months only. A draft can still be ' +
+        'rebuilt or abandoned, so counting one would put numbers here that were never invoiced.' +
+        (known.length ? ' The map above is your pharmacy network, which does not depend on a month.' : '') +
+        '</p></div></div><div class="xf">' +
         '<button class="btn" onclick="go(&#39;import&#39;)">Start a month</button>' +
         '<button class="btn ghost" onclick="go(&#39;runs&#39;)">View history</button>' +
         '</div></div>';

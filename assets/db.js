@@ -150,6 +150,7 @@
             return {
               id: p.id, code: p.code, contact: p.contact, trading: p.trading,
               tin: p.tin || '', brn: p.brn || '', email: p.email || '', state: p.state || '',
+              town: p.town || '', lat: p.lat, lng: p.lng,
               trackingOption: p.tracking_option || '',
               aliases: p.aliases || [], active: p.active
             };
