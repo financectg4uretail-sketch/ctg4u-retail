@@ -258,7 +258,7 @@
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=c9d63e0a1c"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=1ec068b8fe"></script>
+<script src="assets/calc.js?v=f37f62ba62"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '997ca34469d2';
+  var MINE = 'e037c298eb2a';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1842,7 +1842,7 @@ function renderReview() {
     chip(CB.money(CB.sumMoney(ST.lines, function (l) { return l.gross; })) + ' gross', '') +
     chip(bad.length + ' need attention', bad.length ? 'bad' : 'ok') +
     chip(pk.length + ' unmapped product(s)', pk.length ? 'warn' : 'ok') +
-    chip(hk.length + ' unknown pharmacy(s)', hk.length ? 'warn' : 'ok') +
+    chip(hk.length + ' pharmacy(s) to confirm', hk.length ? 'warn' : 'ok') +
     '</div></div>';
 
   if (ST.skipped && ST.skipped.length) {
@@ -1887,12 +1887,26 @@ function renderReview() {
   }
 
   if (hk.length) {
-    h += '<div class="card"><h2>Unknown pharmacies</h2>' +
-      '<div class="hint">Point each one at the master record. The spelling on the file is kept as an alias.</div>' +
+    /* Two different reasons land here. A name nobody recognises is the obvious
+       one. The other is a name that fits several branches EQUALLY - typing
+       UNICARE PHARMACY matches eight of them at the same score - and that row
+       looks like a system failure unless the reason is said out loud, because
+       the pharmacy plainly is in the master data. */
+    var ambig = hk.filter(function (p) { return (noPharm[p][0].pharmacyRivals || []).length > 1; }).length;
+    h += '<div class="card"><h2>Pharmacies to confirm</h2>' +
+      '<div class="hint">Point each one at the master record. The spelling on the file is kept as an alias, ' +
+      'so the same sheet resolves by itself next month.' +
+      (ambig ? ' <b>' + ambig + '</b> of these are not unknown &mdash; they fit several branches equally well, ' +
+        'and picking one for you would put the invoice on whichever branch happened to be first in the list.' : '') +
+      '</div>' +
       '<div class="scroll"><table><tr><th>Name on the file</th><th class="num">Rows</th><th class="num">Gross</th><th>Master pharmacy</th></tr>' +
       hk.map(function (p) {
         var ls = noPharm[p];
-        return '<tr><td><b>' + esc(p) + '</b><div class="mut">' + esc(ls[0]._sheet) + '</div></td>' +
+        var rivals = ls[0].pharmacyRivals || [];
+        return '<tr><td><b>' + esc(p) + '</b><div class="mut">' + esc(ls[0]._sheet) +
+          (rivals.length > 1 ? ' &middot; matches ' + rivals.length + ' branches equally: ' +
+            esc(rivals.map(function (x) { return x.trading || x.contact; }).join(', ')) : '') +
+          '</div></td>' +
           '<td class="num">' + ls.length + '</td>' +
           '<td class="num">' + M(CB.sumMoney(ls, function (l) { return l.gross; })) + '</td>' +
           '<td><select onchange="mapPharmacy(this,' + JSON.stringify(p).replace(/"/g, '&quot;') + ')"><option value="">— choose —</option>' +
@@ -2732,6 +2746,23 @@ function finaliseRun() {
     go('review');
     return;
   }
+  /* A pharmacy whose month comes out negative - more returns than sales - is a
+     credit note, not an invoice, and Xero will not treat a negative ACCREC as
+     one. Rare, but reachable ever since bracketed figures started being read as
+     the credits they are, so it is refused rather than sent. */
+  var negative = (ST.billing || []).filter(function (b) { return b.net < 0; });
+  if (negative.length) {
+    var NL = String.fromCharCode(10);
+    alert(negative.length + ' pharmacy invoice(s) come out negative:' + NL + NL +
+      negative.map(function (b) {
+        return '  ' + (b.pharmacy.trading || b.pharmacy.contact) + '   ' + M(b.net);
+      }).join(NL) + NL + NL +
+      'That is a credit note rather than an invoice, and Xero will not read a ' +
+      'negative invoice as one. Raise those in Xero by hand and take the rows out ' +
+      'of this month first.');
+    return;
+  }
+
   var period = ST.cfg.period;
 
   /* Taken here, synchronously, and not one line later.

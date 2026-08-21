@@ -60,17 +60,26 @@
     return hit / (ta.length + tb.length - hit);
   }
 
-  // Best match in `list` for `needle`; `fields` are candidate name properties.
+  /* Best match in `list` for `needle`; `fields` are candidate name properties.
+   *
+   * `rivals` is the count of DIFFERENT entries that scored exactly as well.
+   * Keeping only the first of equals is what a scoring loop does by default, and
+   * it is silent: typing UNICARE PHARMACY ties eight branches at 0.90 and the
+   * first one gets the invoice. Callers that decide who gets paid have to be
+   * able to see that, so it is reported rather than hidden. */
   function bestMatch(needle, list, fields, threshold) {
     threshold = threshold == null ? 0.62 : threshold;
-    var best = null, bestScore = 0;
+    var best = null, bestScore = 0, tied = [];
     for (var i = 0; i < list.length; i++) {
       for (var f = 0; f < fields.length; f++) {
         var s = similarity(needle, list[i][fields[f]]);
-        if (s > bestScore) { bestScore = s; best = list[i]; }
+        if (s > bestScore) { bestScore = s; best = list[i]; tied = [list[i]]; }
+        else if (s === bestScore && s > 0 && tied.indexOf(list[i]) < 0) tied.push(list[i]);
       }
     }
-    return bestScore >= threshold ? { item: best, score: bestScore } : null;
+    return bestScore >= threshold
+      ? { item: best, score: bestScore, rivals: tied.length, tied: tied }
+      : null;
   }
 
   /* -------------------------------------------------------------- config */
@@ -88,12 +97,19 @@
     sstOnServiceFee: true,
     sstOnInsurance: false,       // insurance is not a taxable service by default
 
-    // Xero chart of accounts (Consignment_Platform_Xero_CoA_Setup.xlsx)
-    acctPassThrough: '320',      // Consignment Collections Payable - Brand Owners
-    acctMgmtIncome: '500',       // Pharmacy Management Fee Income
-    acctServiceIncome: '510',    // Consignment Service Fee Income
-    acctInsuranceIncome: '510',  // set this to its own code if insurance should
-                                 // land somewhere other than service fee income
+    /* Xero chart of accounts. Deliberately blank.
+     *
+     * These carried 320 / 500 / 510, which are not codes this organisation has -
+     * it uses 400-0005, 500-0100 and 500-0200. A wrong code is not a small
+     * error: Xero rejects every line carrying it, so a whole month's import
+     * fails. The real values live in Settings, and a default here only decides
+     * what happens when Settings is empty or has been reset. Refusing to build
+     * is the right answer to that; inventing a plausible code is not. */
+    acctPassThrough: '',         // Consignment Collections Payable - Brand Owners
+    acctMgmtIncome: '',          // Pharmacy Management Fee Income
+    acctServiceIncome: '',       // Consignment Service Fee Income
+    acctInsuranceIncome: '',     // set this if insurance should land somewhere
+                                 // other than service fee income
 
     taxTypeExempt: 'Tax Exempt', // pharmacy invoice + payout bill
     taxTypeSST: 'SST on Sales',  // MUST match the org's Xero tax rate name exactly
@@ -220,10 +236,24 @@
             : bestMatch(out.pharmacyRaw, pharmacies, ['trading', 'contact', 'code']);
       }
       var pm = pharmCache[pk];
-      out.pharmacy = pm ? pm.item : null;
+
+      /* A tie decides who gets the invoice, so it may not be broken quietly.
+       * Eight UNICARE branches score 0.90 against a sheet that just says
+       * UNICARE PHARMACY, and they are eight different Xero contacts - picking
+       * the first of equals bills the wrong company and looks like success.
+       * The confirmed alias still wins outright, which is how the operator
+       * settles it once and never sees it again. Same rule the product side
+       * already had for MIZINO PREMIUM against MIZINO PLACENTA. */
+      var ambiguous = !!(pm && pm.score < 1 && pm.rivals > 1);
+      out.pharmacy = pm && !ambiguous ? pm.item : null;
       out.pharmacyScore = pm ? pm.score : 0;
+      out.pharmacySuggestion = ambiguous ? pm.item : null;
+      out.pharmacyRivals = ambiguous ? pm.tied : null;
       if (!out.pharmacyRaw) out.issues.push('no pharmacy on row');
-      else if (!out.pharmacy) out.issues.push('pharmacy not in master: ' + out.pharmacyRaw);
+      else if (ambiguous) {
+        out.issues.push('pharmacy name matches ' + pm.rivals + ' branches equally: ' +
+          pm.tied.map(function (x) { return x.trading || x.contact; }).join(', '));
+      } else if (!out.pharmacy) out.issues.push('pharmacy not in master: ' + out.pharmacyRaw);
 
       // --- product -> brand owner (project)
       var dk = normKey(out.productRaw);
@@ -280,6 +310,12 @@
         out.issues.push('amount ' + money(given) + ' != qty x price ' + money(computed));
       }
       if (!out.gross) out.issues.push('zero amount');
+      /* Now that a bracketed figure is read as the credit it is, a return can
+         reach the invoice. One negative line among positives is ordinary; it is
+         a whole invoice going negative that is not, because that is a credit
+         note and Xero wants it raised as one. Flagged here so it reaches the
+         Review tab rather than being discovered in Xero. */
+      else if (out.gross < 0) out.issues.push('credit row: ' + money(out.gross));
       // Discount is applied per line and rounded there, so the invoice, the
       // statement and the payout bill can never disagree by rounding.
       out.net = r2(out.gross * (1 - disc));
@@ -291,9 +327,15 @@
   function num(v) {
     if (typeof v === 'number') return isFinite(v) ? v : 0;
     if (v == null) return 0;
-    var s = String(v).replace(/[^\d.\-]/g, '');
+    var raw = String(v).trim();
+    /* Accountants write a credit as (250.00). Stripping punctuation turned that
+       into 250.00 and billed a returned pack as a sale - the sign is the whole
+       meaning of the row, and it was the one character being thrown away. */
+    var bracketed = /^\(.*\)$/.test(raw);
+    var s = raw.replace(/[^\d.\-]/g, '');
     var n = parseFloat(s);
-    return isFinite(n) ? n : 0;
+    if (!isFinite(n)) return 0;
+    return bracketed ? -Math.abs(n) : n;
   }
 
   /* ---------------------------------------------------------- settlement */
@@ -306,37 +348,103 @@
    *   sst         = 8%   x (mgmtFee + serviceFee)
    *   totalPayout = netSales - mgmtFee - serviceFee - sst
    */
+  /* One collapsed sale: a pharmacy, a brand owner, a product at a price.
+   *
+   * BOTH sides of the deal are built from these same rows, and the money is
+   * rounded HERE, once. It used to be rounded per raw row on one side and
+   * recomputed by Xero from quantity x price on the other, and those two
+   * disagreed on 68.8% of realistic price and row-count combinations by up to
+   * three cents each - which is how a pass-through control account stops
+   * clearing to zero and an auditor starts asking about it.
+   *
+   * The brand owner is part of the key. Without it, two brands whose product
+   * names normalise to the same string at the same price would collapse into
+   * one invoice line carrying whichever brand happened to arrive first, and the
+   * settlement could no longer tell them apart. */
+  function collapseItems(lines, c) {
+    var disc = c.discountPct / 100;
+    var map = {}, order = [];
+    lines.forEach(function (L) {
+      if (!isBillable(L)) return;
+      var k = (L.pharmacy.code || L.pharmacy.trading) + '|' +
+              (L.project.code || L.project.name) + '|' +
+              normKey(L.productRaw) + '|' + r2(L.unitPrice).toFixed(2);
+      if (!map[k]) {
+        map[k] = {
+          key: k, pharmacy: L.pharmacy, project: L.project,
+          description: L.productRaw, unitPrice: r2(L.unitPrice),
+          qty: 0, gross: 0, net: 0, discount: 0, lines: []
+        };
+        order.push(k);
+      }
+      var I = map[k];
+      I.qty += L.qty;
+      I.gross = r2(I.gross + L.gross);
+      I.lines.push(L);
+    });
+    return order.map(function (k) {
+      var I = map[k];
+      I.net = r2(I.gross * (1 - disc));
+      I.discount = r2(I.gross - I.net);
+      return I;
+    });
+  }
+
+  /* How this item has to be written on a Xero invoice so that Xero's own
+   * arithmetic - quantity x unit amount, less the discount rate - lands on the
+   * net above rather than near it. When the sheet's quantity and price
+   * reproduce the gross, the invoice keeps showing them, which is what the
+   * pharmacy expects to read. When they do not - an amount column that
+   * disagrees, or a sheet with no quantity at all, which produced a RM0 invoice
+   * against a full payout - the amount itself is billed and the detail moves
+   * into words. A line Xero computes differently from the settlement is money
+   * with no owner. */
+  function invoiceShape(item, c) {
+    var q = num(item.qty), u = r2(item.unitPrice);
+    if (q > 0 && u > 0 && r2(q * u) === r2(item.gross)) {
+      return { qty: q, unit: u, description: item.description };
+    }
+    return {
+      qty: 1, unit: r2(item.gross),
+      description: item.description +
+        (q > 0 && u > 0 ? ' (' + q + ' x ' + money(u) + ')' : '')
+    };
+  }
+
   function buildSettlement(lines, c) {
     c = cfg(c);
     var projects = {}, order = [];
-    var unmapped = [];
+    var unmapped = lines.filter(function (L) { return !isBillable(L); });
 
-    lines.forEach(function (L) {
-      if (!isBillable(L)) { unmapped.push(L); return; }
-      var pc = L.project.code || L.project.name;
+    /* The same collapsed rows the pharmacy invoices are built from, so the two
+       sides are summing identical figures rather than two roundings of one. */
+    collapseItems(lines, c).forEach(function (I) {
+      var pc = I.project.code || I.project.name;
       if (!projects[pc]) {
-        projects[pc] = { project: L.project, code: pc, pharmMap: {}, pharmOrder: [], lines: [] };
+        projects[pc] = { project: I.project, code: pc, pharmMap: {}, pharmOrder: [], lines: [] };
         order.push(pc);
       }
       var P = projects[pc];
-      P.lines.push(L);
-      var ph = L.pharmacy.code || L.pharmacy.trading;
+      P.lines = P.lines.concat(I.lines);
+      var ph = I.pharmacy.code || I.pharmacy.trading;
       if (!P.pharmMap[ph]) {
-        P.pharmMap[ph] = { pharmacy: L.pharmacy, lines: [] };
+        P.pharmMap[ph] = { pharmacy: I.pharmacy, items: [], lines: [] };
         P.pharmOrder.push(ph);
       }
-      P.pharmMap[ph].lines.push(L);
+      P.pharmMap[ph].items.push(I);
+      P.pharmMap[ph].lines = P.pharmMap[ph].lines.concat(I.lines);
     });
 
     var out = order.map(function (pc) {
       var P = projects[pc];
       var byPharmacy = P.pharmOrder.map(function (ph) {
         var B = P.pharmMap[ph];
-        var gross = sumMoney(B.lines, function (l) { return l.gross; });
-        var net = sumMoney(B.lines, function (l) { return l.net; });
+        var gross = sumMoney(B.items, function (i) { return i.gross; });
+        var net = sumMoney(B.items, function (i) { return i.net; });
         return {
           pharmacy: B.pharmacy,
           lines: B.lines,
+          items: B.items,
           gross: gross,
           discount: r2(gross - net),
           net: net,
@@ -390,33 +498,18 @@
   function buildPharmacyBilling(lines, c) {
     c = cfg(c);
     var map = {}, order = [];
-    lines.forEach(function (L) {
-      if (!isBillable(L)) return;
-      var k = L.pharmacy.code || L.pharmacy.trading;
-      if (!map[k]) { map[k] = { pharmacy: L.pharmacy, prodMap: {}, prodOrder: [] }; order.push(k); }
-      var P = map[k];
-      // Same product at the same unit price collapses into one invoice line.
-      var pk = normKey(L.productRaw) + '|' + r2(L.unitPrice).toFixed(2);
-      if (!P.prodMap[pk]) {
-        P.prodMap[pk] = {
-          description: L.productRaw, unitPrice: r2(L.unitPrice),
-          qty: 0, gross: 0, net: 0, project: L.project
-        };
-        P.prodOrder.push(pk);
-      }
-      var R = P.prodMap[pk];
-      R.qty += L.qty;
-      R.gross = r2(R.gross + L.gross);
-      R.net = r2(R.net + L.net);
+    collapseItems(lines, c).forEach(function (I) {
+      var k = I.pharmacy.code || I.pharmacy.trading;
+      if (!map[k]) { map[k] = { pharmacy: I.pharmacy, items: [] }; order.push(k); }
+      map[k].items.push(I);
     });
 
     return order.map(function (k) {
       var P = map[k];
-      var items = P.prodOrder.map(function (pk) { return P.prodMap[pk]; });
-      var gross = sumMoney(items, function (i) { return i.gross; });
-      var net = sumMoney(items, function (i) { return i.net; });
+      var gross = sumMoney(P.items, function (i) { return i.gross; });
+      var net = sumMoney(P.items, function (i) { return i.net; });
       return {
-        pharmacy: P.pharmacy, items: items,
+        pharmacy: P.pharmacy, items: P.items,
         gross: gross, discount: r2(gross - net), net: net
       };
     }).sort(function (a, b) { return b.net - a.net; });
@@ -467,8 +560,15 @@
         if (amt) skipped.push(assign({}, meta, { reason: why, amount: r2(amt) }));
         return;
       }
+      /* A merged cell in Excel carries its value on the first row only; every
+         row under it arrives blank. The fallback used to apply only when the
+         sheet had NO pharmacy column at all, so a per-pharmacy sheet with a
+         merged name column lost every row but the first - measured at 750 of
+         1750 gross gone. It is only safe to fill in when the whole sheet
+         belongs to one pharmacy, which is exactly when pharmFromName is set. */
+      var pcell = m.pharmacy != null ? String(r[m.pharmacy] == null ? '' : r[m.pharmacy]).trim() : '';
       raw.push(assign({}, meta, {
-        pharmacyRaw: m.pharmacy != null ? r[m.pharmacy] : (sheet.pharmFromName ? sheet.pharmFromName.trading : ''),
+        pharmacyRaw: pcell || (sheet.pharmFromName ? sheet.pharmFromName.trading : ''),
         productRaw: r[m.product],
         qty: m.qty != null ? r[m.qty] : 0,
         unitPrice: m.unitPrice != null ? r[m.unitPrice] : 0,
@@ -545,6 +645,18 @@
     return { idate: idate, ddate: addDays(idate, c.dueDays) };
   }
 
+  /* Nothing may be built with a missing account code. Xero rejects the line,
+   * and it rejects it AFTER the operator has done the month, so the failure
+   * lands as far from the cause as it can get. */
+  function requireAccounts(c, which) {
+    var missing = which.filter(function (k) { return !String(c[k] || '').trim(); });
+    if (missing.length) {
+      throw new Error('No Xero account code set for: ' + missing.join(', ') +
+        '. Set them on the Settings tab before building anything - Xero rejects ' +
+        'every line that carries a code the organisation does not have.');
+    }
+  }
+
   var TRACK_COLS = ['TrackingName1', 'TrackingOption1', 'TrackingName2', 'TrackingOption2'];
 
   var SALES_COLS = ['*ContactName', 'EmailAddress', '*InvoiceNumber', 'Reference', '*InvoiceDate',
@@ -568,12 +680,15 @@
   /* (A) ACCREC to each pharmacy. Coded to the pass-through liability, not revenue. */
   function xeroPharmacyInvoices(billing, c) {
     c = cfg(c);
+    requireAccounts(c, ['acctPassThrough']);
     var d = dates(c), rows = [], seq = seqStart(c, 'startPharmacy') - 1;
     billing.forEach(function (B) {
       seq++;
       var no = invNo(c.pharmacyInvPrefix, c.period, seq);
       B.invoiceNumber = no;
       B.items.forEach(function (it, i) {
+        // written so Xero's own arithmetic reproduces it.net exactly
+        var sh = invoiceShape(it, c);
         // tagged from the brand whose goods the line is, so a pharmacy carrying
         // several brands still reports correctly line by line
         rows.push(assign({
@@ -584,9 +699,9 @@
           '*InvoiceDate': dmy(d.idate),
           '*DueDate': dmy(d.ddate),
           'InventoryItemCode': '',
-          '*Description': it.description,
-          '*Quantity': it.qty,
-          '*UnitAmount': r2(it.unitPrice).toFixed(2),
+          '*Description': sh.description,
+          '*Quantity': sh.qty,
+          '*UnitAmount': sh.unit.toFixed(2),
           'Discount': r2(c.discountPct).toFixed(2),
           '*AccountCode': c.acctPassThrough,
           '*TaxType': c.taxTypeExempt,
@@ -600,6 +715,7 @@
   /* (B) ACCREC to each brand owner for CTG4U's own fees. This is the revenue. */
   function xeroServiceInvoices(settlement, c) {
     c = cfg(c);
+    requireAccounts(c, ['acctMgmtIncome', 'acctServiceIncome']);
     var d = dates(c), rows = [], seq = seqStart(c, 'startFee') - 1;
     settlement.projects.forEach(function (S) {
       seq++;
@@ -651,6 +767,7 @@
    * remitted = this bill minus invoice (B) = Total Payout. */
   function xeroPayoutBills(settlement, c) {
     c = cfg(c);
+    requireAccounts(c, ['acctPassThrough']);
     var d = dates(c), rows = [], seq = seqStart(c, 'startPayout') - 1;
     settlement.projects.forEach(function (S) {
       seq++;
@@ -1100,6 +1217,11 @@
   function looksNum(v) {
     if (typeof v === 'number') return isFinite(v);
     var s = String(v == null ? '' : v).replace(/[,\s]/g, '');
+    /* A credit written the accountant's way is still a number. Without this the
+       one bracketed row in a column dragged the column's numeric rate below the
+       bar, the column stopped being recognised as the amount, and the sheet was
+       billed off quantity x price instead - which turns a return into a sale. */
+    s = s.replace(/^\((.*)\)$/, '-$1').replace(/^RM/i, '');
     return s !== '' && /^-?\d*\.?\d+$/.test(s);
   }
 
@@ -1188,15 +1310,27 @@
     }, taken);
     if (out.product != null) taken.push(out.product);
 
+    /* A column whose header says what it is may not be conscripted into another
+       role. Quantity and unit price are both chosen before amount, and both
+       score well on any numeric column, so a sheet carrying nothing but an
+       Amount column had that column taken as one of them - leaving no amount at
+       all, every row worth zero, and the whole month excluded. Whoever sent the
+       sheet wrote the word; believe it. */
+    var saysAmount = function (s) {
+      return hw(s, ['amount', 'total', 'subtotal', 'value', 'jumlah', '金额', '小计'], 1) ? 0 : 1;
+    };
+
     out.qty = pick(function (s) {
       if (s.numRate < 0.7) return 0;
-      return s.intRate * 0.55 + (s.avg > 0 && s.avg < 200 ? 0.25 : 0) + hw(s, ['qty', 'quantity', 'unit sold', 'sold', 'kuantiti', '数量'], 0.4);
+      return saysAmount(s) * (s.intRate * 0.55 + (s.avg > 0 && s.avg < 200 ? 0.25 : 0)) +
+        hw(s, ['qty', 'quantity', 'unit sold', 'sold', 'kuantiti', '数量'], 0.4);
     }, taken);
     if (out.qty != null) taken.push(out.qty);
 
     out.unitPrice = pick(function (s) {
       if (s.numRate < 0.7) return 0;
-      return s.decRate * 0.35 + 0.2 + hw(s, ['unit price', 'u/price', 'price', 'harga', 'rate', '单价'], 0.45);
+      return saysAmount(s) * (s.decRate * 0.35 + 0.2) +
+        hw(s, ['unit price', 'u/price', 'price', 'harga', 'rate', '单价'], 0.45);
     }, taken);
     if (out.unitPrice != null) taken.push(out.unitPrice);
 
@@ -1234,7 +1368,10 @@
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,
     xeroPayoutBills: xeroPayoutBills, toCSV: toCSV, invNo: invNo,
-    detectColumns: detectColumns, findHeaderRow: findHeaderRow, looksDate: looksDate, looksNum: looksNum,
+    detectColumns: detectColumns,
+    requireAccounts: requireAccounts,
+    collapseItems: collapseItems,
+    invoiceShape: invoiceShape, findHeaderRow: findHeaderRow, looksDate: looksDate, looksNum: looksNum,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
   };
