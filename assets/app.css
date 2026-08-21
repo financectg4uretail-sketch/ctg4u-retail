@@ -647,6 +647,30 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
    thing as every other dot, just the largest one */
 .mymap .spot.top{fill:var(--blue-dk);fill-opacity:.95;stroke:var(--cyan);stroke-width:2.4}
 
+/* The winning region. Amber rather than a deeper blue, because the blue is
+   already carrying the amount and a "darkest blue plus" reads as more sales
+   rather than as the answer to a different question. */
+.mymap .st.lead{filter:drop-shadow(0 0 2px rgba(200,121,26,.35))}
+.mymap .leadline{stroke:#c8791a;stroke-opacity:.85;stroke-linecap:round}
+.mymap .leaddot{fill:#c8791a}
+.mymap .leadlab rect{fill:#fffaf2;stroke:#e0b27a}
+.mymap .leadlab .l1{fill:#8a520d;font-weight:700;letter-spacing:.03em}
+/* #a2691f read as 4.42:1 on the label ground, which is under AA for text this
+   size - it is a figure the operator is meant to read, not a decoration. */
+.mymap .leadlab .l2{fill:#8f5a15;font-variant-numeric:tabular-nums}
+
+/* Reading the shading off a bar, instead of hovering every state to find out
+   what its colour was worth. */
+.mapscale{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"cap bar" ". tks";
+  gap:6px 12px;align-items:center;margin-top:14px;max-width:520px}
+.mapscale .cap{grid-area:cap;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tx3)}
+.mapscale .bar{grid-area:bar;height:9px;border-radius:var(--r);border:1px solid var(--ln)}
+.mapscale .tk{grid-area:tks;font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;
+  justify-self:end}
+.mapscale .tk:first-of-type{justify-self:start}
+.mapscale .tk.mid{justify-self:center}
+.mapscale .tk,.mapscale .tk.mid{grid-row:2;grid-column:2}
+
 .maplegend{display:flex;gap:26px;margin-top:16px;flex-wrap:wrap;align-items:flex-start}
 .mlist{display:flex;flex-direction:column;gap:7px;min-width:220px}
 .mlrow{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--tx)}

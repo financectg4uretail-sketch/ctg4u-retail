@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=66be9fb06e">
+<link rel="stylesheet" href="assets/app.css?v=31dec49262">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'b143db47eff0';
+  var MINE = '997ca34469d2';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -722,6 +722,19 @@ function renderMap(byPharmacy, byState, network) {
   var maxPh = Math.max.apply(null, [1].concat((byPharmacy || []).map(function (p) { return Number(p.gross || 0); })));
   var leader = network ? null : (byPharmacy || [])[0];
 
+  /* The best region, taken by comparing rather than by trusting the order the
+     query happened to return. Shading alone never answered "which region is
+     best" - it asks the eye to rank shades of one colour, which is the thing
+     the eye is worst at - so the winner is named on the map itself. */
+  var leadState = null;
+  if (!network) {
+    (byState || []).forEach(function (st) {
+      if (!leadState || Number(st.gross || 0) > Number(leadState.gross || 0)) leadState = st;
+    });
+    if (leadState && !(Number(leadState.gross) > 0)) leadState = null;
+  }
+  var leadKey = leadState ? String(leadState.state).toLowerCase() : null;
+
   /* place every pharmacy once, in the shared projection */
   var byKey = {};
   GEO.states.forEach(function (s) { byKey[s.key] = s; });
@@ -774,15 +787,25 @@ function renderMap(byPharmacy, byState, network) {
   panels.forEach(function (pn, i) { pn.zoom = unit[i] / finest; });   // <= 1
 
   var svgs = panels.map(function (pn) {
-    var shapes = pn.states.map(function (st) {
+    /* The winner is drawn last so its outline sits on top of its neighbours'.
+       Painted in document order, a shared border belongs to whichever state was
+       drawn second, and the highlight would come out half-erased. */
+    var order = pn.states.slice().sort(function (a, b) {
+      return (a.key === leadKey ? 1 : 0) - (b.key === leadKey ? 1 : 0);
+    });
+    var shapes = order.map(function (st) {
       var v = stateTotal[st.key] || 0;
       /* Square root, not linear: one state with four times the sales should not
          be four times as dark, or everything below the leader washes out. */
       var t = v ? 0.10 + 0.60 * Math.sqrt(v / maxState) : 0;
-      return '<path d="' + st.d + '" fill="' + (v ? 'rgba(0,119,200,' + t.toFixed(3) + ')' : '#eef2f6') +
-        '" stroke="#ffffff" stroke-width="' + (1.2 / pn.zoom).toFixed(2) + '" stroke-linejoin="round">' +
+      var won = st.key === leadKey;
+      return '<path class="st' + (won ? ' lead' : '') + '" d="' + st.d +
+        '" fill="' + (v ? 'rgba(0,119,200,' + t.toFixed(3) + ')' : '#eef2f6') +
+        '" stroke="' + (won ? '#c8791a' : '#ffffff') +
+        '" stroke-width="' + ((won ? 2.6 : 1.2) / pn.zoom).toFixed(2) + '" stroke-linejoin="round">' +
         '<title>' + esc(st.name) + (v ? ' — ' + M2(v) + ' from ' + stateCount[st.key] + ' pharmacy(s)'
-                                      : ' — no sales this period') + '</title></path>';
+                                      : ' — no sales this period') +
+        (won ? ' — best region this period' : '') + '</title></path>';
     }).join('');
 
     var mine = placed.filter(function (s) {
@@ -820,12 +843,67 @@ function renderMap(byPharmacy, byState, network) {
         '</g>';
     }).join('');
 
+    /* Name the winning region on the map, in whichever panel holds it.
+       Written into a corner rather than onto the state, because the state that
+       wins is usually Selangor and Selangor is under the densest cluster of
+       pins on the map - a label there would be half-buried by the thing it is
+       meant to explain. A thin line does the pointing instead. */
+    var badge = '';
+    var won = leadKey && pn.states.filter(function (st) { return st.key === leadKey; })[0];
+    if (won) {
+      var F = 7.8 / pn.zoom, F2 = 6.2 / pn.zoom, PADX = 4.4 / pn.zoom, PADY = 3.6 / pn.zoom;
+      var line1 = String(leadState.state).toUpperCase();
+      var line2 = M(leadState.gross) + ' &middot; ' + (stateCount[leadKey] || 0) + ' pharmacies';
+      /* no text metrics in an SVG string, so width is estimated from the glyph
+         count - generous, since a label that is too wide only wastes margin
+         while one that is too narrow spills past its own box */
+      var W = Math.max(line1.length * F * 0.62, line2.length * F2 * 0.56) + PADX * 2;
+      var H = F + F2 + PADY * 2 + 2 / pn.zoom;
+      var M0 = 4 / pn.zoom;
+
+      /* Sit the label in whichever corner is furthest from the state, so the
+         pointer line crosses as little of the map as it can. */
+      var spots = [
+        [pn.vb.x + M0, pn.vb.y + M0], [pn.vb.x + pn.vb.w - M0 - W, pn.vb.y + M0],
+        [pn.vb.x + M0, pn.vb.y + pn.vb.h - M0 - H],
+        [pn.vb.x + pn.vb.w - M0 - W, pn.vb.y + pn.vb.h - M0 - H]
+      ];
+      var best = spots[0], far = -1;
+      spots.forEach(function (c) {
+        var d = Math.hypot(c[0] + W / 2 - won.cx, c[1] + H / 2 - won.cy);
+        if (d > far) { far = d; best = c; }
+      });
+      var bx = best[0], by = best[1];
+      /* leave from the box edge nearest the state, not from its middle */
+      var ax = won.cx < bx ? bx : (won.cx > bx + W ? bx + W : won.cx);
+      var ay = won.cy < by ? by : (won.cy > by + H ? by + H : won.cy);
+
+      badge =
+        '<line class="leadline" x1="' + ax.toFixed(1) + '" y1="' + ay.toFixed(1) +
+          '" x2="' + won.cx.toFixed(1) + '" y2="' + won.cy.toFixed(1) +
+          '" stroke-width="' + (1 / pn.zoom).toFixed(2) +
+          '" stroke-dasharray="' + (2.4 / pn.zoom).toFixed(1) + ' ' + (2 / pn.zoom).toFixed(1) + '"/>' +
+        '<circle class="leaddot" cx="' + won.cx.toFixed(1) + '" cy="' + won.cy.toFixed(1) +
+          '" r="' + (2.2 / pn.zoom).toFixed(1) + '"/>' +
+        '<g class="leadlab">' +
+        '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + W.toFixed(1) +
+          '" height="' + H.toFixed(1) + '" rx="' + (3 / pn.zoom).toFixed(1) +
+          '" stroke-width="' + (0.9 / pn.zoom).toFixed(2) + '"/>' +
+        '<text class="l1" x="' + (bx + PADX).toFixed(1) + '" y="' + (by + PADY + F * 0.82).toFixed(1) +
+          '" font-size="' + F.toFixed(1) + '">' + esc(line1) + '</text>' +
+        '<text class="l2" x="' + (bx + PADX).toFixed(1) + '" y="' +
+          (by + PADY + F + 2 / pn.zoom + F2 * 0.8).toFixed(1) +
+          '" font-size="' + F2.toFixed(1) + '">' + line2 + '</text>' +
+        '</g>';
+    }
+
     return '<figure class="mp" style="flex:' + pn.cfg.flex + '">' +
       '<svg viewBox="' + pn.vb.x.toFixed(0) + ' ' + pn.vb.y.toFixed(0) + ' ' +
         pn.vb.w.toFixed(0) + ' ' + pn.vb.h.toFixed(0) + '" role="img" aria-label="' +
         esc(pn.cfg.label) + ', each pharmacy drawn as a circle' +
-        (network ? '' : ' sized by its sales') + '">' +
-        shapes + dots + '</svg>' +
+        (network ? '' : ' sized by its sales') +
+        (won ? ', best region ' + esc(leadState.state) : '') + '">' +
+        shapes + dots + badge + '</svg>' +
       '<figcaption>' + esc(pn.cfg.label) + ' &middot; ' + mine.length + ' pharmacies</figcaption>' +
       '</figure>';
   }).join('');
@@ -838,6 +916,26 @@ function renderMap(byPharmacy, byState, network) {
         var d = ((4.6 + 4.8 * Math.sqrt(f)) * 2).toFixed(0);
         return '<i style="width:' + d + 'px;height:' + d + 'px"></i><b>' + M2(maxPh * f) + '</b>';
       }).join('') + '</div>';
+  }
+
+  /* A scale for the shading, because until now the only way to read a state's
+     colour was to hover it. The stops follow the same square root the fill
+     does - a linear ramp would put the midpoint of the bar at a quarter of the
+     money and quietly misreport every state on the map. */
+  var scale = '';
+  if (!network && maxState > 1) {
+    var stops = [];
+    for (var f = 0; f <= 1.0001; f += 0.125) {
+      stops.push('rgba(0,119,200,' + (0.10 + 0.60 * Math.sqrt(f)).toFixed(3) + ') ' +
+                 (f * 100).toFixed(0) + '%');
+    }
+    scale = '<div class="mapscale">' +
+      '<span class="cap">State shading</span>' +
+      '<span class="bar" style="background:linear-gradient(90deg,' + stops.join(',') + ')"></span>' +
+      '<span class="tk">0</span>' +
+      '<span class="tk mid">' + M2(maxState / 2) + '</span>' +
+      '<span class="tk">' + M2(maxState) + '</span>' +
+      '</div>';
   }
 
   var top5 = (byState || []).slice(0, 5).map(function (s) {
@@ -876,7 +974,7 @@ function renderMap(byPharmacy, byState, network) {
     }).join('') + '</ol></details>';
 
   return xcard(network ? 'Your pharmacy network' : 'Where the sales come from',
-    '<div class="mapsplit">' + svgs + '</div>' + key + index +
+    '<div class="mapsplit">' + svgs + '</div>' + scale + key + index +
     '<div class="maplegend">' +
       '<div class="mlist">' + top5 + '</div>' +
       '<div class="mnote">' +
@@ -885,8 +983,11 @@ function renderMap(byPharmacy, byState, network) {
             Object.keys(placed.reduce(function (m, s) { m[s.p.state] = 1; return m; }, {})).length +
             ' states. Once a month is finalised the circles resize by what each sold and the states ' +
             'shade by their share. '
-          : (leader ? '<b>' + esc(leader.name) + '</b> leads on ' + M(leader.gross) +
-                      ', in ' + esc(leader.town || leader.state || 'an unknown town') + '. ' : '')) +
+          : ((leadState ? '<b>' + esc(leadState.state) + '</b> is the strongest region on ' +
+                          M(leadState.gross) + ' across ' + (stateCount[leadKey] || 0) +
+                          ' pharmacies, outlined on the map. ' : '') +
+             (leader ? '<b>' + esc(leader.name) + '</b> is the single best shop on ' + M(leader.gross) +
+                       ', in ' + esc(leader.town || leader.state || 'an unknown town') + '. ' : ''))) +
         'The two halves are drawn at <b>different scales</b> so the peninsula, which holds three ' +
         'quarters of the pharmacies in a fifth of the country&rsquo;s width, is legible &mdash; but a ' +
         'circle of a given size means the same amount in both. Circles sit at their <b>town</b>, not ' +
