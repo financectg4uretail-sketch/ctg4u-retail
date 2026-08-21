@@ -159,6 +159,8 @@
             return {
               id: b.id, code: b.code, name: b.name,
               xeroContact: b.xero_contact, email: b.email || '',
+              bankName: b.bank_name || '', bankAccountName: b.bank_account_name || '',
+              bankAccountNo: b.bank_account_no || '',
               trackingOption: b.tracking_option || '', active: b.active
             };
           }),
@@ -206,6 +208,9 @@
       var row = {
         code: b.code, name: b.name, xero_contact: b.xeroContact,
         email: b.email || null, tracking_option: b.trackingOption || null,
+        bank_name: b.bankName || null,
+        bank_account_name: b.bankAccountName || null,
+        bank_account_no: b.bankAccountNo || null,
         active: b.active !== false,
         updated_at: new Date().toISOString()
       };

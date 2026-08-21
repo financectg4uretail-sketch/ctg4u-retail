@@ -197,6 +197,13 @@
 
 <section class="panel" id="p-cfg">
   <div class="card">
+    <h2>Your company</h2>
+    <div class="hint">Printed at the top of every settlement statement, which is a document that leaves
+      the building. A brand owner reading it should be able to tell who it is from and where to write
+      back without asking. Blank lines are simply left out.</div>
+    <div class="grid g3" id="cfgCompany"></div>
+  </div>
+  <div class="card">
     <h2>Commercial terms</h2>
     <div class="hint">These drive every number in the run. Change them here, never in the output files.</div>
     <div class="grid g3" id="cfgTerms"></div>
@@ -256,9 +263,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=237fc79560"></script>
+<script src="assets/db.js?v=e1ffedcf0e"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=473179c3c4"></script>
+<script src="assets/calc.js?v=33ba2038f3"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -279,7 +286,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'f2b27344832b';
+  var MINE = '199332425911';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2267,11 +2274,18 @@ function dlWorkbook() {
 /* ============================================================ MASTER */
 function renderProjects() {
   var t = $('#tblProjects');
-  t.innerHTML = '<tr><th>Code</th><th>Brand owner name</th><th>Xero contact (must match Xero)</th><th>Email</th><th></th></tr>' +
+  /* The bank columns are printed on the settlement statement, so the brand
+     owner can check where the payout is going before it goes rather than
+     after. A blank set is called out on the statement itself. */
+  t.innerHTML = '<tr><th>Code</th><th>Brand owner name</th><th>Xero contact (must match Xero)</th>' +
+    '<th>Email</th><th>Bank</th><th>Name in bank account</th><th>Account no.</th><th></th></tr>' +
     ST.master.projects.map(function (p, i) {
       return '<tr>' +
         ed('projects', i, 'code', p.code, 'BO-001') + ed('projects', i, 'name', p.name, 'Legal name') +
         ed('projects', i, 'xeroContact', p.xeroContact, 'exact Xero contact') + ed('projects', i, 'email', p.email, '') +
+        ed('projects', i, 'bankName', p.bankName, 'e.g. MAYBANK') +
+        ed('projects', i, 'bankAccountName', p.bankAccountName, 'as the bank holds it') +
+        ed('projects', i, 'bankAccountNo', p.bankAccountNo, '') +
         '<td><button class="btn sm danger" title="Remove" onclick="delRow(\'projects\',' + i + ')">✕</button></td></tr>';
     }).join('');
 }
@@ -2596,6 +2610,14 @@ $('#fileMaster').onchange = function (e) {
 
 /* =========================================================== SETTINGS */
 var CFG_FIELDS = {
+  company: [
+    ['coName', 'Company name', 'As it should appear on a statement', 'text'],
+    ['coReg', 'Company registration no.', 'Left off the statement when blank', 'text'],
+    ['coSst', 'SST registration no.', 'Left off when blank', 'text'],
+    ['coAddress', 'Registered address', 'One line per line', 'area'],
+    ['coEmail', 'Contact email', 'Where a brand owner should reply', 'text'],
+    ['coPhone', 'Contact phone', '', 'text']
+  ],
   terms: [
     ['discountPct', 'Pharmacy discount %', 'Taken off every line and rounded there', 'number'],
     ['mgmtFeePerPharmacy', 'Management fee per pharmacy (MYR)', 'Charged once per pharmacy by each brand owner', 'number'],
@@ -2603,7 +2625,7 @@ var CFG_FIELDS = {
     ['sstPct', 'SST %', 'Applied to the two fees above', 'number'],
     ['sstOnMgmtFee', 'SST on management fee', 'Include it in the SST base', 'bool'],
     ['sstOnServiceFee', 'SST on service fee', 'Include it in the SST base', 'bool'],
-    ['insuranceFeePct', 'Insurance % of gross sales', 'The Insurans line on the pharmacy sheets. Shown to the pharmacy but deducted from the brand owner', 'number'],
+    ['insuranceFeePct', 'Insurance % of gross sales', 'Zero, so it is not deducted. The Insurans line on the pharmacy sheets is shown to the pharmacy either way. Set a rate here only if a contract charges it to the brand owner', 'number'],
     ['sstOnInsurance', 'SST on insurance', 'Off by default: insurance is not a taxable service', 'bool']
   ],
   xero: [
@@ -2646,11 +2668,17 @@ function renderCfg() {
         return '<label class="kpi row" style="gap:9px;cursor:pointer"><input type="checkbox" ' + (v ? 'checked' : '') +
           ' onchange="setCfg(\'' + k + '\',this.checked)"><span><span class="l">' + f[1] + '</span><div class="mut">' + f[2] + '</div></span></label>';
       }
+      if (f[3] === 'area') {
+        return '<div class="kpi"><div class="l">' + f[1] + '</div><div class="mut" style="margin-bottom:6px">' +
+          f[2] + '</div><textarea rows="3" style="width:100%;font:inherit;resize:vertical" ' +
+          'onchange="setCfg(&#39;' + k + '&#39;,this.value)">' + esc(v == null ? '' : v) + '</textarea></div>';
+      }
       return '<div class="kpi"><div class="l">' + f[1] + '</div><div class="mut" style="margin-bottom:6px">' + f[2] + '</div>' +
         '<input type="' + (f[3] === 'number' ? 'number' : f[3] === 'date' ? 'date' : 'text') + '" step="0.01" value="' +
         esc(v == null ? '' : v) + '" style="width:100%" onchange="setCfg(\'' + k + '\',this.value)"></div>';
     }).join('');
   };
+  mk('#cfgCompany', CFG_FIELDS.company);
   mk('#cfgTerms', CFG_FIELDS.terms); mk('#cfgXero', CFG_FIELDS.xero);
   mk('#cfgTrack', CFG_FIELDS.tracking); mk('#cfgNum', CFG_FIELDS.num);
 }

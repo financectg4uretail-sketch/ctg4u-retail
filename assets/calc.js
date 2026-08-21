@@ -85,13 +85,34 @@
   /* -------------------------------------------------------------- config */
 
   var DEFAULTS = {
+    /* Who is issuing the statement. It goes in the header, the way any
+     * remittance advice names the party sending the money, so a brand owner
+     * can tell at a glance who this came from and where to write back. Left
+     * blank rather than guessed: a registration number invented for a document
+     * that goes to another company is worse than an absent one. */
+    coName: 'CTG4U RETAIL SDN BHD',
+    coReg: '',                   // company registration no
+    coSst: '',                   // SST registration no, if registered
+    coAddress: '',               // free text, newlines become lines
+    coEmail: '',
+    coPhone: '',
+
     discountPct: 19.20,          // pharmacy discount off gross sales
     mgmtFeePerPharmacy: 75.00,   // RM per pharmacy per brand owner per month
     serviceFeePct: 3.80,         // % of GROSS sales amount (not net)
-    insuranceFeePct: 0.80,       // % of GROSS. The 'Insurans' line the pharmacy
-                                 // sheets carry. It is shown to the pharmacy but
-                                 // never deducted from what the pharmacy pays -
-                                 // it comes off the brand owner's payout.
+    /* Two separate facts that were one setting, which is why turning the charge
+     * off also broke the check on the pharmacy's own sheet.
+     *
+     * The RATE is what the pharmacy sheets print on their Insurans line, and it
+     * is 0.8%. It is not deducted from what the pharmacy pays; it is there for
+     * the pharmacy to see, and the cross-check reads it to confirm we are
+     * looking at the same arrangement the sheet was built on.
+     *
+     * Whether it comes off the BRAND OWNER's payout is the separate question,
+     * and the answer here is no. A contract that does charge it flips the
+     * switch; the rate does not have to be falsified to stop the deduction. */
+    insuranceFeePct: 0.80,       // what the pharmacy sheets state
+    deductInsurance: false,      // whether the brand owner is charged it
     sstPct: 8.00,                // service tax on the fees
     sstOnMgmtFee: true,
     sstOnServiceFee: true,
@@ -156,6 +177,11 @@
     if (!m) return '';
     var y = +m[1], mo = +m[2];
     return y + '-' + pad(mo) + '-' + pad(new Date(y, mo, 0).getDate());
+  }
+
+  function monthStart(period) {                   // 'YYYY-MM' -> 'YYYY-MM-01'
+    var m = /^(\d{4})-(\d{1,2})$/.exec(String(period || ''));
+    return m ? m[1] + '-' + pad(+m[2]) + '-01' : '';
   }
 
   function addDays(iso, days) {
@@ -457,7 +483,8 @@
       var pharmacyCount = byPharmacy.length;
       var mgmtFee = r2(c.mgmtFeePerPharmacy * pharmacyCount);
       var serviceFee = r2(salesAmount * c.serviceFeePct / 100);
-      var insuranceFee = r2(salesAmount * (c.insuranceFeePct || 0) / 100);
+      var insuranceFee = c.deductInsurance
+        ? r2(salesAmount * (c.insuranceFeePct || 0) / 100) : 0;
       var sstBase = r2(
         (c.sstOnMgmtFee ? mgmtFee : 0) +
         (c.sstOnServiceFee ? serviceFee : 0) +
@@ -925,6 +952,29 @@
     'body{font:12px/1.55 "Public Sans","Segoe UI",Arial,sans-serif;color:#1b2733;margin:0;background:#f4f7f9}',
     '.stmt{background:#fff;max-width:760px;margin:0 auto 24px;padding:34px 40px;page-break-after:always}',
     '.stmt:last-child{page-break-after:auto}',
+    /* The coloured band, then who is sending and who is being paid. The shape
+       is the one every remittance advice uses, because the questions a reader
+       arrives with are always the same two: who is this from, and is my
+       account right. */
+    '.band{display:flex;justify-content:space-between;align-items:center;background:#0077c8;color:#fff;',
+    '  padding:13px 18px;margin:-34px -40px 22px;border-radius:2px}',
+    '.bco{font-weight:800;font-size:14px;letter-spacing:.4px}',
+    '.bti{font-size:12px;opacity:.92}',
+    '.head{display:flex;justify-content:space-between;gap:34px;align-items:flex-start}',
+    '.issuer{max-width:46%}',
+    '.issuer .co{font-size:15px;font-weight:700}',
+    '.issuer .reg{font-size:10px;color:#8494a5;margin-top:1px}',
+    '.issuer .addr{font-size:11px;color:#5b6b7c;margin-top:8px;line-height:1.5}',
+    '.facts{flex:1;max-width:52%}',
+    '.facts .ref{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}',
+    '.facts .per{font-size:12px;color:#5b6b7c;margin-bottom:12px}',
+    '.kv div{display:flex;gap:8px;font-size:11px;line-height:1.75}',
+    '.kv span{flex:none;width:132px;color:#8494a5}',
+    '.kv span:after{content:":"}',
+    '.kv b{font-weight:600;color:#1b2733}',
+    '.kv .warn{display:block;background:#fff6e5;border:1px solid #f0d5a0;color:#8a5a12;',
+    '  padding:7px 9px;border-radius:3px;font-size:10px;line-height:1.5;margin-top:6px}',
+    '.lead{font-size:11.5px;color:#5b6b7c;margin:20px 0 4px;border-top:1px solid #e6ecf1;padding-top:14px}',
     '.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0077c8;padding-bottom:12px}',
     '.co{font-size:17px;font-weight:800;letter-spacing:.3px}',
     '.ti{font-size:13px;color:#555;margin-top:2px}',
@@ -959,7 +1009,12 @@
        that ran to a second page the table began flush against the paper edge,
        inside the area most printers cannot reach. Giving @page the margin
        gives every page the same one. */
-    '@media print{body{background:#fff}.stmt{margin:0;padding:0;max-width:none}}',
+    /* The band bleeds to the edge of the section using negative margins, so
+       the section needs the padding those margins are measured against. The
+       PAGE margin still comes from @page, which is what puts a margin on the
+       second page as well as the first. */
+    '@media print{body{background:#fff}.stmt{margin:0;padding:0;max-width:none}',
+    '  .band{margin:0 0 22px}}',
     '@page{size:A4;margin:16mm 15mm}'
   ].join('');
 
@@ -976,13 +1031,53 @@
         '<td class="n">' + money(B.mgmtFee) + '</td></tr>';
     }).join('');
 
+    /* A labelled pair, colons aligned down the block. */
+    var kv = function (k, v) {
+      return v ? '<div><span>' + k + '</span><b>' + esc(v) + '</b></div>' : '';
+    };
+    var addr = String(c.coAddress || '').split(/[\r\n]+/)
+      .map(function (l) { return l.trim(); }).filter(Boolean)
+      .map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
+
+    /* Whose account the payout is going to. Printed so it can be checked
+       BEFORE the money moves rather than chased afterwards, and marked plainly
+       when it has never been filled in - a blank here is the difference
+       between a payment and a payment somewhere else. */
+    var B = P.project || {};
+    var bank = (B.bankName || B.bankAccountName || B.bankAccountNo)
+      ? kv('Name in bank account', B.bankAccountName || B.name) +
+        kv('Bank account', B.bankAccountNo) +
+        kv('Bank name', B.bankName)
+      : '<div class="warn">Bank details not set for this brand owner &mdash; ' +
+        'add them on the Contacts tab before remitting.</div>';
+
     return '<section class="stmt">' +
-      '<div class="top"><div><div class="co">CTG4U RETAIL SDN BHD</div>' +
-      '<div class="ti">Consignment Settlement Statement</div></div>' +
-      '<div class="meta"><div><span>Period</span>' + esc(periodLabel(c.period)) + '</div>' +
-      '<div><span>Statement date</span>' + esc(c.invoiceDate || monthEnd(c.period)) + '</div></div></div>' +
-      '<div class="to"><span>Brand owner</span><b>' + esc(P.project.name) + '</b>' +
-      (P.code ? '<div class="sm">' + esc(P.code) + '</div>' : '') + '</div>' +
+      '<div class="band"><span class="bco">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</span>' +
+      '<span class="bti">Consignment Settlement Statement</span></div>' +
+
+      '<div class="head">' +
+        '<div class="issuer">' +
+          '<div class="co">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</div>' +
+          (c.coReg ? '<div class="reg">Company no. ' + esc(c.coReg) + '</div>' : '') +
+          (c.coSst ? '<div class="reg">SST no. ' + esc(c.coSst) + '</div>' : '') +
+          '<div class="addr">' + addr + '</div>' +
+          (c.coEmail ? '<div class="addr"><div>' + esc(c.coEmail) + '</div></div>' : '') +
+          (c.coPhone ? '<div class="addr"><div>' + esc(c.coPhone) + '</div></div>' : '') +
+        '</div>' +
+        '<div class="facts">' +
+          '<div class="ref">' + esc(P.payoutBillNumber || '—') + '</div>' +
+          '<div class="per">Statement for ' + esc(monthStart(c.period)) + ' to ' +
+            esc(monthEnd(c.period)) + '</div>' +
+          '<div class="kv">' +
+            kv('Brand owner', P.project.name) +
+            kv('Reference', P.code) +
+            bank +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="lead">Summary at a glance &mdash; what was sold through each pharmacy this ' +
+      'period, what was charged, and what is left to remit.</div>' +
 
       '<table class="dt"><thead><tr><th>Pharmacy</th><th class="n">Sales Amount</th>' +
       '<th class="n">Discount ' + r2(c.discountPct) + '%</th><th class="n">Net Sales</th>' +
@@ -1372,7 +1467,8 @@
     DEFAULTS: DEFAULTS, cfg: cfg,
     r2: r2, sum: sum, sumMoney: sumMoney, money: money, num: num,
     normKey: normKey, similarity: similarity, bestMatch: bestMatch,
-    monthEnd: monthEnd, addDays: addDays, dmy: dmy, periodLabel: periodLabel, periodYYMM: periodYYMM,
+    monthEnd: monthEnd,
+    monthStart: monthStart, addDays: addDays, dmy: dmy, periodLabel: periodLabel, periodYYMM: periodYYMM,
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,
