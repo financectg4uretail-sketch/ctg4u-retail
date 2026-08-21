@@ -258,7 +258,7 @@
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=237fc79560"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=f37f62ba62"></script>
+<script src="assets/calc.js?v=473179c3c4"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'c6d377e9c236';
+  var MINE = 'f2b27344832b';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })

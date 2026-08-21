@@ -939,16 +939,28 @@
     '.dt td{padding:6px 8px;border-bottom:1px solid #eee}',
     '.dt tr.tt td{border-top:1.5px solid #333;border-bottom:0;font-weight:700;background:#fafafa}',
     '.n{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;white-space:nowrap}',
-    '.sm2{margin-top:22px;width:62%;margin-left:38%}',
+    /* The deductions and the payout are one argument and may not be split by a
+       page break: at twenty to twenty-six pharmacies the summary straddled the
+       boundary, which put TOTAL PAYOUT AMOUNT on a page of its own, away from
+       the lines that arrive at it. Measured, not guessed. */
+    '.sm2{margin-top:22px;width:62%;margin-left:38%;break-inside:avoid;page-break-inside:avoid}',
     '.sm2 td{padding:5px 0}.sm2 td.n{width:130px}',
     '.sm2 tr.sub td{border-top:1px solid #ccc;font-weight:600}',
     '.sm2 tr.tot td{border-top:2px solid #1b2733;border-bottom:3px double #1b2733;font-weight:800;font-size:14px;padding:8px 0}',
-    '.ft{margin-top:34px;font-size:10px;color:#666;border-top:1px solid #eee;padding-top:12px}',
+    /* The signature block lives inside this, so keeping the footer whole keeps
+       a signature line from being orphaned from the name above it. */
+    '.ft{margin-top:34px;font-size:10px;color:#666;border-top:1px solid #eee;padding-top:12px;',
+    '  break-inside:avoid;page-break-inside:avoid}',
     '.sig{display:flex;gap:60px;margin-top:44px}',
     '.sig div{flex:1;font-size:10px;color:#666}',
     '.sig span{display:block;border-top:1px solid #999;margin-top:38px}',
-    '@media print{body{background:#fff}.stmt{margin:0;padding:18mm 16mm;max-width:none}}',
-    '@page{size:A4;margin:0}'
+    /* The page margin belongs to @page, not to the section's padding.
+       Padding is applied once, at the top of the element - so on a statement
+       that ran to a second page the table began flush against the paper edge,
+       inside the area most printers cannot reach. Giving @page the margin
+       gives every page the same one. */
+    '@media print{body{background:#fff}.stmt{margin:0;padding:0;max-width:none}}',
+    '@page{size:A4;margin:16mm 15mm}'
   ].join('');
 
   /* One brand owner's statement. Every figure comes off the settlement object,
