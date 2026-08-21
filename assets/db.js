@@ -235,23 +235,21 @@
 
     /* An operator-confirmed name. Stored so the same spelling resolves by itself
      * next month instead of being re-judged by fuzzy matching. */
+    /* Appended in the database, in one statement.
+     *
+     * These read the array, changed it here, and wrote the whole thing back.
+     * Two aliases saved in the same moment meant the second write carried a
+     * copy of the array from before the first, and one of them vanished. This
+     * application is routinely used with two tabs open - that is exactly how a
+     * stale read overwrote the fee rates once already - so the window is not
+     * theoretical. */
     addProductAlias: function (id, alias) {
-      return sb.from('products').select('aliases').eq('id', id).single()
-        .then(function (r) {
-          var a = one(r, 'Read aliases').aliases || [];
-          if (a.indexOf(alias) < 0) a.push(alias);
-          return sb.from('products').update({ aliases: a, updated_at: new Date().toISOString() })
-            .eq('id', id).then(function (u) { fail('Save alias', u.error); return a; });
-        });
+      return sb.rpc('product_add_alias', { p_id: id, p_alias: alias })
+        .then(function (r) { fail('Save alias', r.error); return r.data || []; });
     },
     addPharmacyAlias: function (id, alias) {
-      return sb.from('pharmacies').select('aliases').eq('id', id).single()
-        .then(function (r) {
-          var a = one(r, 'Read aliases').aliases || [];
-          if (a.indexOf(alias) < 0) a.push(alias);
-          return sb.from('pharmacies').update({ aliases: a, updated_at: new Date().toISOString() })
-            .eq('id', id).then(function (u) { fail('Save alias', u.error); return a; });
-        });
+      return sb.rpc('pharmacy_add_alias', { p_id: id, p_alias: alias })
+        .then(function (r) { fail('Save alias', r.error); return r.data || []; });
     },
 
     /* ------------------------------------------------------------ settings */
@@ -345,57 +343,60 @@
         });
       }, Promise.resolve()).then(function () { return lines.length; });
     },
-    saveSettlements: function (runId, projects) {
-      if (!projects.length) return Promise.resolve(0);
-      return sb.from('run_settlements').insert(projects.map(function (P) {
-        return {
-          run_id: runId, brand_owner_id: P.project.id,
-          pharmacy_count: P.pharmacyCount,
-          sales_amount: P.salesAmount, discount: P.discount, net_sales: P.netSales,
-          mgmt_fee: P.mgmtFee, service_fee: P.serviceFee,
-          insurance_fee: P.insuranceFee || 0, sst: P.sst,
-          total_payout: P.totalPayout,
-          fee_invoice_number: P.serviceInvoiceNumber || null,
-          payout_bill_number: P.payoutBillNumber || null,
-          by_pharmacy: P.byPharmacy.map(function (B) {
-            return {
-              code: B.pharmacy.code, trading: B.pharmacy.trading,
-              gross: B.gross, discount: B.discount, net: B.net, mgmtFee: B.mgmtFee
-            };
-          })
-        };
-      })).then(function (r) { fail('Save settlements', r.error); return projects.length; });
-    },
-
     /* Atomic. Two people finalising at the same second get different blocks. */
     reserveNumbers: function (docType, period, count) {
       return sb.rpc('reserve_doc_numbers', {
         p_doc_type: docType, p_period: period, p_count: count
       }).then(function (r) { fail('Reserve document numbers', r.error); return r.data; });
     },
-    /* The ledger of numbers actually issued. The unique index on
-     * (doc_type, number) is what makes a duplicate physically impossible. */
-    recordDocuments: function (runId, period, docs) {
-      if (!docs.length) return Promise.resolve(0);
-      return sb.from('documents').insert(docs.map(function (d) {
-        return {
-          run_id: runId, period: period, doc_type: d.docType,
-          number: d.number, contact_name: d.contact, amount: d.amount,
-          // named by id, never by contact name: branches of one legal entity
-          // can share a name, and the Xero connector matches on this
-          pharmacy_id: d.pharmacyId || null,
-          brand_owner_id: d.brandOwnerId || null
-        };
-      })).then(function (r) { fail('Record documents', r.error); return docs.length; });
-    },
-    finaliseRun: function (runId, totals) {
-      return sb.auth.getUser().then(function (u) {
-        return sb.from('runs').update({
-          status: 'final', totals: totals,
-          finalised_at: new Date().toISOString(),
-          finalised_by: u.data.user ? u.data.user.id : null
-        }).eq('id', runId).then(function (r) { fail('Finalise run', r.error); return true; });
-      });
+    /* The second half of finalising, as one statement that either happens or
+     * does not.
+     *
+     * It used to be three more round trips after the rows were uploaded -
+     * settlements, then document numbers, then the flip to 'final' - and the
+     * connection can stop between any two. Nothing was ever mis-invoiced by
+     * that, because the flip came last, but a failure on the last step meant
+     * the operator retried and got a SECOND run while the first kept the
+     * document numbers it had already recorded.
+     *
+     * The database also does the checks that used to live in the browser: that
+     * this period has no finalised run yet, taken under a row lock rather than
+     * as a read that happened some time ago, and that every uploaded batch of
+     * rows actually landed. */
+    commitRun: function (runId, expectedLines, totals, projects, docs) {
+      return sb.rpc('commit_run', {
+        p_run_id: runId,
+        p_expected_lines: expectedLines,
+        p_totals: totals,
+        p_settlements: projects.map(function (P) {
+          return {
+            brand_owner_id: P.project.id,
+            pharmacy_count: P.pharmacyCount,
+            sales_amount: P.salesAmount, discount: P.discount, net_sales: P.netSales,
+            mgmt_fee: P.mgmtFee, service_fee: P.serviceFee,
+            insurance_fee: P.insuranceFee || 0, sst: P.sst,
+            total_payout: P.totalPayout,
+            fee_invoice_number: P.serviceInvoiceNumber || null,
+            payout_bill_number: P.payoutBillNumber || null,
+            by_pharmacy: P.byPharmacy.map(function (B) {
+              return {
+                code: B.pharmacy.code, trading: B.pharmacy.trading,
+                gross: B.gross, discount: B.discount, net: B.net, mgmtFee: B.mgmtFee
+              };
+            })
+          };
+        }),
+        p_documents: docs.map(function (d) {
+          return {
+            doc_type: d.docType, number: d.number,
+            contact_name: d.contact, amount: d.amount,
+            // named by id, never by contact name: branches of one legal entity
+            // can share a name, and the Xero connector matches on this
+            pharmacy_id: d.pharmacyId || null,
+            brand_owner_id: d.brandOwnerId || null
+          };
+        })
+      }).then(function (r) { fail('Finalise run', r.error); return r.data || {}; });
     },
     voidRun: function (runId, note) {
       return sb.from('runs').update({ status: 'void', note: note || null })

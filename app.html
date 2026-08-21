@@ -256,7 +256,7 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=c9d63e0a1c"></script>
+<script src="assets/db.js?v=237fc79560"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
 <script src="assets/calc.js?v=f37f62ba62"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'e037c298eb2a';
+  var MINE = 'c6d377e9c236';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2775,6 +2775,11 @@ function finaliseRun() {
   FINALISING = true;
   var release = function () { FINALISING = false; };
 
+  /* This asks whether the month is already billed so the operator hears about
+     it before uploading a few thousand rows. It is NOT the guard: it is a read
+     that happens some seconds before the write, so two tabs both pass it. The
+     guard is in commit_run, which takes the row lock first. Neither replaces
+     the other - keep both. */
   DB.periodStatus(period).then(function (st) {
     if (st.finalised) {
       release();
@@ -2838,12 +2843,17 @@ function finaliseRun() {
         });
       });
 
-      var runId;
+      /* Two steps now, not five. The rows go up in batches because a month of
+         them is too much for one call; everything after that - the settlements,
+         the document numbers, and the flip to final - is a single statement in
+         the database that either happens or does not. The row count goes with
+         it, so a batch that failed on the way up cannot be finalised over. */
+      var runId, expected = ST.lines.length;
       DB.createRun(period, ST.cfg, totals, ST.sheets.map(function (x) { return x.file; }))
         .then(function (run) { runId = run.id; ST.runId = runId; return DB.saveRunLines(runId, ST.lines); })
-        .then(function () { return DB.saveSettlements(runId, ST.settlement.projects); })
-        .then(function () { return DB.recordDocuments(runId, period, docs); })
-        .then(function () { return DB.finaliseRun(runId, totals); })
+        .then(function () {
+          return DB.commitRun(runId, expected, totals, ST.settlement.projects, docs);
+        })
         .then(function () { return DB.audit('run_finalised', { period: period, totals: totals }); })
         .then(loadRuns)
         .then(function () {
@@ -2855,7 +2865,8 @@ function finaliseRun() {
         }, function (e) {
           release();
           err(e);
-          toast('The run was NOT finalised. The reserved numbers stay burnt - the next run continues after them, which is safe.', 'bad');
+          toast('The run was NOT finalised - nothing was written. The reserved numbers stay ' +
+                'burnt, which is safe: the next run continues after them.', 'bad');
         });
     }, function (e) { release(); err(e); });
   }, function (e) { release(); err(e); });
