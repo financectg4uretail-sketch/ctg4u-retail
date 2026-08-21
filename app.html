@@ -1181,15 +1181,33 @@ function handleFiles(files) {
   ST.packages = [];
   if (!files || !files.length) return;
   ST.sheets = [];
-  var pending = files.length;
+  var pending = files.length, names = [];
+
+  /* A file that yields nothing usable used to end in silence. The reader does
+   * not throw on it - the spreadsheet library happily parses a text file as a
+   * one-cell CSV, every sheet is then discarded for being too short, and the
+   * page simply sits there. To the operator that is indistinguishable from the
+   * application being broken, so say which file it was and what was wrong. */
+  function finished() {
+    renderSheets(); renderSteps();
+    if (!ST.sheets.length && !ST.packages.length) {
+      toast('Nothing readable in ' + names.join(', ') +
+            '. A sold-out list needs a header row and at least one row of sales.', 'bad');
+    }
+  }
+
   Array.prototype.forEach.call(files, function (f) {
+    names.push(f.name);
     var r = new FileReader();
     r.onload = function () {
       try { readWorkbook(f.name, r.result); }
       catch (err) { toast('Could not read ' + f.name + ': ' + err.message, 'bad'); }
-      if (--pending === 0) { renderSheets(); renderSteps(); }
+      if (--pending === 0) finished();
     };
-    r.onerror = function () { toast('Could not open ' + f.name, 'bad'); if (--pending === 0) { renderSheets(); renderSteps(); } };
+    r.onerror = function () {
+      toast('Could not open ' + f.name, 'bad');
+      if (--pending === 0) finished();
+    };
     r.readAsArrayBuffer(f);
   });
 }
@@ -1612,25 +1630,63 @@ function projectSelect(onch, preselect) {
     }).join('') + '</select>';
 }
 
+/* Both of these promise the operator that the answer is remembered. Both used
+ * to change ST.master in memory and then call save() - which writes SETTINGS,
+ * not master data. So nothing was written at all: the mapping survived until
+ * the page reloaded, the toast said otherwise, and the same products came back
+ * unmapped the following month with no sign anything had been lost.
+ *
+ * Worse, writing the whole settings blob from here meant a tab holding stale
+ * rates could silently overwrite the fee percentages every time somebody mapped
+ * a product. Neither of these is a settings change; neither touches settings. */
 function mapProduct(sel, rawName) {
-  if (!sel.value) return;
+  if (!sel.value || !requireWrite()) return;
+  var proj = ST.master.projects.filter(function (p) { return p.code === sel.value; })[0];
+  if (!proj) { toast('That brand owner is no longer in the master data', 'bad'); return; }
+
+  var key = CB.normKey(rawName);
   var existing = ST.master.products.filter(function (p) {
-    return CB.normKey(p.name) === CB.normKey(rawName) || (p.aliases || []).some(function (a) { return CB.normKey(a) === CB.normKey(rawName); });
+    return CB.normKey(p.name) === key ||
+           (p.aliases || []).some(function (a) { return CB.normKey(a) === key; });
   })[0];
-  if (existing) { existing.project = sel.value; }
-  else ST.master.products.push({ sku: '', name: rawName, project: sel.value, price: '', aliases: [rawName] });
-  save(); recompute(); renderReview();
-  toast('"' + rawName + '" mapped — remembered for next month', 'ok');
+
+  var row = existing
+    ? { id: existing.id, sku: existing.sku || '', name: existing.name,
+        brandOwnerId: proj.id, active: true,
+        aliases: (existing.aliases || []).concat(
+          (existing.aliases || []).indexOf(rawName) < 0 && CB.normKey(existing.name) !== key ? [rawName] : []) }
+    : { sku: '', name: rawName, brandOwnerId: proj.id, aliases: [rawName], active: true };
+
+  sel.disabled = true;
+  DB.saveProduct(row)
+    .then(function () { return refreshMaster(); })
+    .then(function () {
+      renderReview();
+      toast('"' + rawName + '" mapped to ' + proj.name + ' — saved', 'ok');
+    })
+    .catch(function (e) {
+      sel.disabled = false;
+      toast('Could not save that mapping: ' + e.message, 'bad');
+    });
 }
 
 function mapPharmacy(sel, rawName) {
-  if (!sel.value) return;
+  if (!sel.value || !requireWrite()) return;
   var p = ST.master.pharmacies.filter(function (x) { return x.code === sel.value; })[0];
   if (!p) return;
-  p.aliases = p.aliases || [];
-  if (p.aliases.indexOf(rawName) < 0) p.aliases.push(rawName);
-  save(); recompute(); renderReview();
-  toast('"' + rawName + '" → ' + p.trading + ' — remembered', 'ok');
+  if (!p.id) { toast('That pharmacy has no record to attach the name to', 'bad'); return; }
+
+  sel.disabled = true;
+  DB.addPharmacyAlias(p.id, rawName)
+    .then(function () { return refreshMaster(); })
+    .then(function () {
+      renderReview();
+      toast('"' + rawName + '" → ' + p.trading + ' — saved', 'ok');
+    })
+    .catch(function (e) {
+      sel.disabled = false;
+      toast('Could not save that name: ' + e.message, 'bad');
+    });
 }
 
 /* ========================================================= SETTLEMENT */
@@ -2131,11 +2187,83 @@ $('#fileMaster').onchange = function (e) {
       };
       var bo = get('Brand owners'), pr = get('Products'), ph = get('Pharmacies');
       var spl = function (v) { return String(v || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean); };
-      if (bo) ST.master.projects = bo.map(function (r) { return { code: r.code, name: r.name, xeroContact: r.xeroContact, email: r.email }; });
-      if (pr) ST.master.products = pr.map(function (r) { return { sku: r.sku, name: r.name, project: r.project, price: r.price, aliases: spl(r.aliases) }; });
-      if (ph) ST.master.pharmacies = ph.map(function (r) { return { code: r.code, trading: r.trading, contact: r.contact, email: r.email, tin: r.tin, aliases: spl(r.aliases) }; });
-      save(); recompute(); renderProjects(); renderProducts(); renderPharmacies();
-      toast('Master data imported', 'ok');
+      /* This used to replace the three collections in memory and call save(),
+         which writes settings - so an entire master-data import was announced
+         as successful and then lost on the next reload. Each row is written
+         now, matched to any existing record by its code so a re-import updates
+         rather than duplicating. */
+      var jobs = [];
+
+      (bo || []).forEach(function (r) {
+        if (!r.code || !r.name) return;
+        var have = ST.master.projects.filter(function (x) { return x.code === r.code; })[0];
+        jobs.push(function () {
+          return DB.saveBrandOwner({
+            id: have && have.id, code: r.code, name: r.name,
+            xeroContact: r.xeroContact || r.name, email: r.email || '',
+            trackingOption: (have && have.trackingOption) || '', active: true
+          });
+        });
+      });
+
+      (ph || []).forEach(function (r) {
+        if (!r.code || !(r.contact || r.trading)) return;
+        var have = ST.master.pharmacies.filter(function (x) { return x.code === r.code; })[0];
+        jobs.push(function () {
+          return DB.savePharmacy({
+            id: have && have.id, code: r.code,
+            contact: r.contact || r.trading, trading: r.trading || r.contact,
+            tin: r.tin || '', brn: r.brn || '', email: r.email || '',
+            state: r.state || (have && have.state) || '',
+            aliases: spl(r.aliases), active: true
+          });
+        });
+      });
+
+      /* products come last: each one names a brand owner, and that owner has to
+         exist before the product can point at it */
+      var pending = pr || [];
+
+      var done = 0, failed = [];
+      var run = jobs.reduce(function (chain, job) {
+        return chain.then(function () {
+          return job().then(function () { done++; },
+                            function (e) { failed.push(e.message); });
+        });
+      }, Promise.resolve());
+
+      run.then(function () { return refreshMaster(); })
+        .then(function () {
+          var more = pending.map(function (r) {
+            if (!r.name) return null;
+            var owner = ST.master.projects.filter(function (x) {
+              return x.code === r.project || x.name === r.project;
+            })[0];
+            if (!owner) { failed.push('no brand owner "' + r.project + '" for ' + r.name); return null; }
+            var have = ST.master.products.filter(function (x) { return CB.normKey(x.name) === CB.normKey(r.name); })[0];
+            return function () {
+              return DB.saveProduct({
+                id: have && have.id, sku: r.sku || '', name: r.name,
+                brandOwnerId: owner.id, aliases: spl(r.aliases), active: true
+              });
+            };
+          }).filter(Boolean);
+          return more.reduce(function (chain, job) {
+            return chain.then(function () {
+              return job().then(function () { done++; }, function (e) { failed.push(e.message); });
+            });
+          }, Promise.resolve());
+        })
+        .then(function () { return refreshMaster(); })
+        .then(function () {
+          renderProjects(); renderProducts(); renderPharmacies();
+          if (failed.length) {
+            toast(done + ' row(s) saved, ' + failed.length + ' refused: ' + failed[0], 'bad');
+          } else {
+            toast(done + ' master row(s) imported and saved', 'ok');
+          }
+        })
+        .catch(function (e) { toast('Import failed: ' + e.message, 'bad'); });
     } catch (err) { toast('Import failed: ' + err.message, 'bad'); }
   };
   r.readAsArrayBuffer(f);
@@ -2260,8 +2388,21 @@ function importMasterData(d) {
 /* Draft figures become a run: numbers are reserved from the database, the
  * lines and settlements are stored, and the period is closed. After this the
  * same numbers can never be handed out again. */
+/* One finalise at a time.
+ *
+ * The database already refuses a second final run for the same period, and that
+ * is the guard that matters - it is the one a second browser tab cannot get
+ * past. But it refuses at the very end, after numbers have been reserved, so an
+ * accidental double-click still burns a block of document numbers that nobody
+ * will ever use. Numbers are deliberately never reused, because they may
+ * already be in Xero, so the cost is permanent even though it is small.
+ *
+ * This is the cheap half of the fix and does not replace the constraint. */
+var FINALISING = false;
+
 function finaliseRun() {
   if (!requireWrite()) return;
+  if (FINALISING) { toast('Already finalising — give it a moment', 'warn'); return; }
   if (!ST.settlement || !ST.settlement.projects.length) { toast('Nothing to finalise', 'bad'); return; }
   if (!ST.check || !ST.check.ok) {
     toast('The reconciliation does not balance - fix that before finalising', 'bad'); return;
@@ -2283,8 +2424,19 @@ function finaliseRun() {
   }
   var period = ST.cfg.period;
 
+  /* Taken here, synchronously, and not one line later.
+   *
+   * The first attempt set this inside the periodStatus callback, which is
+   * asynchronous - so three clicks in a row all passed the guard before any of
+   * them reached the line that raises it, and all three ran. A flag that is
+   * raised after an await is not a lock at all. Tested by clicking three times:
+   * three runs, twenty-one document numbers. */
+  FINALISING = true;
+  var release = function () { FINALISING = false; };
+
   DB.periodStatus(period).then(function (st) {
     if (st.finalised) {
+      release();
       alert(CB.periodLabel(period) + ' has already been finalised.\n\n' +
         'Void that run on the History tab first if it really needs redoing.');
       return;
@@ -2297,7 +2449,7 @@ function finaliseRun() {
       ST.billing.length + ' pharmacy invoices\n' +
       ST.settlement.projects.length + ' brand owner fee invoices and payout bills\n' +
       'Total payout ' + M(CB.sumMoney(ST.settlement.projects, function (p) { return p.totalPayout; })) +
-      extra)) return;
+      extra)) { release(); return; }
 
     var nP = ST.billing.length, nB = ST.settlement.projects.length;
     Promise.all([
@@ -2354,16 +2506,18 @@ function finaliseRun() {
         .then(function () { return DB.audit('run_finalised', { period: period, totals: totals }); })
         .then(loadRuns)
         .then(function () {
+          release();
           renderOut();
           renderXeroPost();
           toast('Finalised. ' + docs.length + ' document numbers issued and recorded.', 'ok');
           go('runs');
         }, function (e) {
+          release();
           err(e);
           toast('The run was NOT finalised. The reserved numbers stay burnt - the next run continues after them, which is safe.', 'bad');
         });
-    }, err);
-  }, err);
+    }, function (e) { release(); err(e); });
+  }, function (e) { release(); err(e); });
 }
 
 /* ------------------------------------------------------------------ Xero */
