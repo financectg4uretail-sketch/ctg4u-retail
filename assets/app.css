@@ -820,3 +820,50 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
   color:var(--tx2);margin:0;
 }
 .dsec p{margin:0;font-size:12.5px;color:var(--tx3);flex:1;min-width:0}
+
+/* ----------------------------------------------------- numbered map pins */
+
+/* Sixty-two pharmacy names will not fit on this map - the average name is 22
+   characters and the peninsula panel is 488px wide - but sixty-two two-digit
+   numbers fit inside circles that are already being drawn. The names go in the
+   index below, and the number is the join between the two. */
+.pin{cursor:default}
+.pin .spot{
+  fill:var(--blue-dk);fill-opacity:.72;stroke:#fff;
+  transition:fill-opacity .14s;
+}
+.pin .pinno{
+  fill:#fff;text-anchor:middle;font-family:var(--num);font-weight:600;
+  font-variant-numeric:tabular-nums;pointer-events:none;user-select:none;
+}
+.pin:hover .spot{fill-opacity:1}
+/* the leader keeps a ring rather than a different colour: same kind of thing,
+   just the largest one */
+.pin.top .spot{fill-opacity:1;stroke:var(--cyan);stroke-width:2.4}
+
+.mapindex{margin-top:16px;border-top:1px solid var(--rule);padding-top:13px}
+.mapindex summary{
+  cursor:pointer;font:600 11px var(--sans);letter-spacing:.09em;
+  text-transform:uppercase;color:var(--tx3);
+}
+.mapindex summary:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:var(--r)}
+.mixlist{
+  list-style:none;counter-reset:pin;margin:14px 0 0;padding:0;
+  columns:3;column-gap:26px;
+}
+.mixlist li{
+  counter-increment:pin;break-inside:avoid;
+  display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;
+  padding:3px 0;font-size:12px;line-height:1.35;
+}
+.mixlist li::before{
+  content:counter(pin);
+  font:600 10.5px var(--num);color:#fff;background:var(--blue-dk);
+  border-radius:3px;text-align:center;padding:1px 0;font-variant-numeric:tabular-nums;
+}
+.mixlist .nm{color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mixlist .tw{display:none}
+.mixlist .am{font:500 11.5px var(--num);color:var(--tx2);font-variant-numeric:tabular-nums}
+
+@media (max-width:900px){ .mixlist{columns:2} }
+@media (max-width:560px){ .mixlist{columns:1} }

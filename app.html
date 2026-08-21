@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=0f052d5da6">
+<link rel="stylesheet" href="assets/app.css?v=66be9fb06e">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -279,7 +279,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'cd479f592b68';
+  var MINE = 'b143db47eff0';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -608,22 +608,30 @@ function onLand(x, y) {
  * hovered at all, which makes it not a dot but a smudge.
  *
  * So overlapping pairs push each other apart, a little at a time, and every
- * circle is tethered: MAX_SHIFT viewBox units is about 22km on this projection,
- * and a dot that reaches the limit stops rather than drifting off to somewhere
- * it never was. Anything pushed into the sea is pulled back. The caption
+ * circle is tethered: a dot that reaches the limit slides along it rather than
+ * drifting off to somewhere it never was. Anything pushed into the sea is
+ * pulled back. The caption
  * already says positions are towns rather than addresses; this is inside that
  * claim, not beyond it. */
 function declutter(pts, iterations) {
   if (pts.length < 2) return pts;
-  var MAX_SHIFT = 10;
+  /* About 33km on this projection - which sounds like a lot until you notice a
+     circle is already ~30km across at this scale, so a dot moved by the limit
+     still overlaps the town it belongs to. It has to be this loose because the
+     Klang Valley's towns are closer together than the circles that represent
+     them: Cheras to Kajang is 13km and the circles are wider than that. */
+  var MAX_SHIFT = 15;
   pts.forEach(function (p) { p.ox = p.x; p.oy = p.y; });
 
-  for (var it = 0; it < (iterations || 60); it++) {
+  for (var it = 0; it < (iterations || 140); it++) {
     var moved = false;
     for (var i = 0; i < pts.length; i++) {
       for (var j = i + 1; j < pts.length; j++) {
         var a = pts[i], b = pts[j];
-        var need = (a.r + b.r) * 0.92;              // touching is fine, hiding is not
+        /* Circles may touch but not overlap. The looser 0.92 was fine while a dot
+           was only a dot; the rank number now lives inside the circle, so any
+           overlap at all starts eating a digit. */
+        var need = a.r + b.r;
         var dx = b.x - a.x, dy = b.y - a.y;
         var d = Math.hypot(dx, dy);
         if (d >= need) continue;
@@ -633,8 +641,17 @@ function declutter(pts, iterations) {
         [[a, -1], [b, 1]].forEach(function (pair) {
           var q = pair[0], sgn = pair[1];
           var nx = q.x + ux * sgn, ny = q.y + uy * sgn;
-          if (Math.hypot(nx - q.ox, ny - q.oy) > MAX_SHIFT) return;   // tethered
-          if (!onLand(nx, ny)) return;                                // and on land
+          /* Clamp to the tether rather than refusing the step. Refusing froze a
+             dot the moment it touched the limit, even for a sideways move that
+             was well inside it - which is how Cheras and Kajang stayed on top
+             of each other with room to spare beside them. */
+          var ex = nx - q.ox, ey = ny - q.oy, out = Math.hypot(ex, ey);
+          if (out > MAX_SHIFT) {
+            nx = q.ox + ex / out * MAX_SHIFT;
+            ny = q.oy + ey / out * MAX_SHIFT;
+            if (Math.hypot(nx - q.x, ny - q.y) < 0.01) return;         // already there
+          }
+          if (!onLand(nx, ny)) return;                                 // and on land
           q.x = nx; q.y = ny; moved = true;
         });
       }
@@ -657,15 +674,36 @@ function fanOut(pts, spreadScale) {
   Object.keys(by).forEach(function (k) {
     var g = by[k];
     if (g.length < 2) return;
-    var R = (4 + g.length * 1.1) * (spreadScale || 1);
+    /* The ring has to clear a circle diameter between neighbours, and since the
+       numbers went inside the circles that diameter grew. These points all sit
+       on one town's coordinate anyway, so a wider ring costs no accuracy. */
+    var R = (5.4 + g.length * 1.35) * (spreadScale || 1);
+    var taken = [];
     g.forEach(function (p, i) {
-      var a = (i / g.length) * Math.PI * 2 - Math.PI / 2;
-      var dx = R * Math.cos(a), dy = R * Math.sin(a) * 0.8;
-      var f = 1;
-      while (f > 0.12 && !onLand(p.x + dx * f, p.y + dy * f)) f *= 0.6;
-      if (f <= 0.12) f = 0;
-      p.x += dx * f;
-      p.y += dy * f;
+      var base = (i / g.length) * Math.PI * 2 - Math.PI / 2;
+      /* A coastal town has half its ring in the water - Iskandar Puteri sits on
+         the strait - and the old code answered that by shrinking the seat back
+         toward the centre, which stacked the shops on top of one another again.
+         Walk the seat around the ring instead, and only shrink if the whole
+         circle turns out to be unusable. */
+      var seat = null;
+      for (var k = 0; k < 12 && !seat; k++) {
+        var a = base + (k % 2 ? -1 : 1) * Math.ceil(k / 2) * (Math.PI / 6);
+        var nx = p.x + R * Math.cos(a), ny = p.y + R * Math.sin(a) * 0.88;
+        if (!onLand(nx, ny)) continue;
+        var clash = taken.some(function (t) {
+          return Math.hypot(t[0] - nx, t[1] - ny) < R * 0.9;
+        });
+        if (!clash) seat = [nx, ny];
+      }
+      if (!seat) {
+        var dx = R * Math.cos(base), dy = R * Math.sin(base) * 0.88, f = 1;
+        while (f > 0.12 && !onLand(p.x + dx * f, p.y + dy * f)) f *= 0.6;
+        seat = f > 0.12 ? [p.x + dx * f, p.y + dy * f] : [p.x, p.y];
+      }
+      taken.push(seat);
+      p.x = seat[0];
+      p.y = seat[1];
     });
   });
   return pts;
@@ -687,6 +725,21 @@ function renderMap(byPharmacy, byState, network) {
   /* place every pharmacy once, in the shared projection */
   var byKey = {};
   GEO.states.forEach(function (s) { byKey[s.key] = s; });
+  /* Ranked once, here, so a number means the same thing in both panels and
+     matches the index below. With sales the order IS the sales order, which
+     makes the number itself informative - 1 is the biggest. Without sales there
+     is nothing to rank on, so it runs by state and name and the index reads as
+     a directory instead. */
+  var ordered = (byPharmacy || []).slice();
+  if (network) {
+    ordered.sort(function (a, b) {
+      return String(a.state || '').localeCompare(String(b.state || '')) ||
+             String(a.name || '').localeCompare(String(b.name || ''));
+    });
+  }
+  var rankOf = {};
+  ordered.forEach(function (p, i) { rankOf[p.code] = i + 1; });
+
   var placed = [], noCoord = 0;
   (byPharmacy || []).forEach(function (p) {
     var xy;
@@ -739,7 +792,11 @@ function renderMap(byPharmacy, byState, network) {
       /* divided by the panel's zoom, so the drawn circle is the same size on
          screen whichever half of the country it is in */
       return { p: s.p, x: s.x, y: s.y,
-               r: (network ? 3.4 : 2.2 + 6.0 * Math.sqrt(g / maxPh)) / pn.zoom };
+      /* The floor is what makes numbering possible: a 4px circle cannot hold
+         "27". Raising the minimum costs some of the size contrast, and that is
+         the trade for every pharmacy being identifiable rather than only
+         hoverable. */
+               r: (network ? 5.2 : 4.6 + 4.8 * Math.sqrt(g / maxPh)) / pn.zoom };
     });
     fanOut(mine, 1 / pn.zoom);
     declutter(mine);
@@ -748,12 +805,19 @@ function renderMap(byPharmacy, byState, network) {
       var g = Number(s.p.gross || 0);
       var rad = s.r;
       var top = leader && s.p.code === leader.code;
-      return '<circle class="spot' + (top ? ' top' : '') + '" cx="' + s.x.toFixed(1) +
-        '" cy="' + s.y.toFixed(1) + '" r="' + rad.toFixed(1) +
-        '" stroke-width="' + (1.1 / pn.zoom).toFixed(2) + '">' +
-        '<title>' + esc(s.p.name) + ' (' + esc(s.p.code) + ')' +
+      var n = rankOf[s.p.code];
+      var tip = '<title>' + n + ' · ' + esc(s.p.name) + ' (' + esc(s.p.code) + ')' +
         (network ? '' : '\n' + M(g)) +
-        '\n' + esc(s.p.town || s.p.state || '') + '</title></circle>';
+        '\n' + esc(s.p.town || s.p.state || '') + '</title>';
+      /* number and circle move together, so hovering either one is the same
+         gesture and the tooltip is attached to both */
+      return '<g class="pin' + (top ? ' top' : '') + '">' +
+        '<circle class="spot" cx="' + s.x.toFixed(1) + '" cy="' + s.y.toFixed(1) +
+          '" r="' + rad.toFixed(1) + '" stroke-width="' + (1.1 / pn.zoom).toFixed(2) + '">' +
+          tip + '</circle>' +
+        '<text class="pinno" x="' + s.x.toFixed(1) + '" y="' + (s.y + 2.3 / pn.zoom).toFixed(1) +
+          '" font-size="' + (6.6 / pn.zoom).toFixed(1) + '">' + n + tip + '</text>' +
+        '</g>';
     }).join('');
 
     return '<figure class="mp" style="flex:' + pn.cfg.flex + '">' +
@@ -771,7 +835,7 @@ function renderMap(byPharmacy, byState, network) {
   if (!network && maxPh > 1) {
     key = '<div class="dotkey"><span>Circle size</span>' +
       [0.15, 0.5, 1].map(function (f) {
-        var d = ((2.2 + 6.0 * Math.sqrt(f)) * 2).toFixed(0);
+        var d = ((4.6 + 4.8 * Math.sqrt(f)) * 2).toFixed(0);
         return '<i style="width:' + d + 'px;height:' + d + 'px"></i><b>' + M2(maxPh * f) + '</b>';
       }).join('') + '</div>';
   }
@@ -797,8 +861,22 @@ function renderMap(byPharmacy, byState, network) {
       }).join('');
   }
 
+  /* The index. Every number on the map resolves here, which is the whole reason
+     for numbering: 62 pharmacy names cannot be written on this map - the average
+     is 22 characters, and 45 of them would want 5,400px of label in a 488px
+     panel - but 62 two-digit numbers fit inside the circles that are already
+     drawn, and the names live underneath in columns. */
+  var index = '<details class="mapindex"' + (network ? '' : ' open') + '>' +
+    '<summary>' + ordered.length + ' pharmacies, numbered by ' +
+      (network ? 'state' : 'sales') + '</summary>' +
+    '<ol class="mixlist">' + ordered.map(function (p) {
+      return '<li><span class="nm">' + esc(p.name) + '</span>' +
+        '<span class="tw">' + esc(p.town || p.state || '') + '</span>' +
+        (network ? '' : '<span class="am">' + M(p.gross) + '</span>') + '</li>';
+    }).join('') + '</ol></details>';
+
   return xcard(network ? 'Your pharmacy network' : 'Where the sales come from',
-    '<div class="mapsplit">' + svgs + '</div>' + key +
+    '<div class="mapsplit">' + svgs + '</div>' + key + index +
     '<div class="maplegend">' +
       '<div class="mlist">' + top5 + '</div>' +
       '<div class="mnote">' +
