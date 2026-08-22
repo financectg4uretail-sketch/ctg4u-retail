@@ -146,9 +146,10 @@
     <h2>Brand owners</h2>
     <div class="hint">Who the goods belong to. Each one gets its own statement, its own fee invoice and its own payout bill.
       The registration number, tax number, address and bank account are printed on the statement. Pull them from
-      the Xero contact rather than typing them twice &mdash; except the <b>registration number</b>, which a Xero
-      contact does not hold, and the <b>bank name</b> and <b>account holder</b>, which Xero also has no field for.
-      The address is not shown here because it belongs in Xero; correct it there and pull again.</div>
+      the Xero contact rather than typing them twice &mdash; a contact carries all four. The only two Xero has no
+      field for are the <b>bank name</b> and the <b>account holder name</b>: its single bank field holds the account
+      number and nothing else. The address is not shown here because it belongs in Xero; correct it there and pull
+      again.</div>
     <div class="scroll"><table id="tblProjects"></table></div>
     <div class="row" style="margin-top:12px">
       <button class="btn sm ro-only" onclick="pullBrandOwnerDetails()">⭳ Pull details from Xero</button>
@@ -273,7 +274,7 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=72072a6036"></script>
+<script src="assets/db.js?v=89d066f3cd"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
 <script src="assets/calc.js?v=8201d9680a"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
@@ -296,7 +297,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'f3d41390fd85';
+  var MINE = '94fcfb9deea8';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2294,7 +2295,7 @@ function renderProjects() {
       return '<tr>' +
         ed('projects', i, 'code', p.code, 'BO-001') + ed('projects', i, 'name', p.name, 'Legal name') +
         ed('projects', i, 'xeroContact', p.xeroContact, 'exact Xero contact') + ed('projects', i, 'email', p.email, '') +
-        ed('projects', i, 'brn', p.brn, 'typed - Xero has none') +
+        ed('projects', i, 'brn', p.brn, 'from Xero') +
         ed('projects', i, 'taxNo', p.taxNo, 'from Xero') +
         ed('projects', i, 'bankName', p.bankName, 'e.g. MAYBANK') +
         ed('projects', i, 'bankAccountName', p.bankAccountName, 'as the bank holds it') +
@@ -2682,22 +2683,28 @@ function pullBrandOwnerDetails() {
     (r.contacts || []).forEach(function (c) { byName[CB.normKey(c.name)] = c; });
 
     var todo = ST.master.projects.filter(function (p) { return p.id; });
-    var hit = [], miss = [], noBank = [];
+    var hit = [], miss = [], noBank = [], noReg = [];
     var chain = todo.reduce(function (prev, p) {
       var x = byName[CB.normKey(p.xeroContact || p.name)];
       if (!x) { miss.push(p.name); return prev; }
       hit.push(p.name);
       if (!x.bankAccountDetails) noBank.push(p.name);
+      if (!x.companyNumber) noReg.push(p.name);
       return prev.then(function () { return DB.syncBrandOwnerFromXero(p.id, x); });
     }, Promise.resolve());
 
     return chain.then(refreshMaster).then(function () {
+      /* Saying what is still empty is the useful half. A pull that writes
+         nothing because Xero holds nothing looks exactly like one that worked,
+         and the operator would go on believing the statement is complete. */
       var msg = hit.length + ' of ' + todo.length + ' matched a Xero contact';
+      var gaps = [];
+      if (noReg.length) gaps.push(noReg.length + ' with no company number');
+      if (noBank.length) gaps.push(noBank.length + ' with no bank account');
       if (miss.length) msg += ' — no contact for ' + miss.slice(0, 3).join(', ') +
         (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : '');
-      else if (noBank.length) msg += ' — ' + noBank.length +
-        ' have no bank account on the Xero contact';
-      toast(msg, miss.length ? 'warn' : 'ok');
+      else if (gaps.length) msg += ' — ' + gaps.join(', ') + ' in Xero';
+      toast(msg, (miss.length || gaps.length) ? 'warn' : 'ok');
     });
   }).catch(function (e) { err(e); toast('Could not read Xero: ' + e.message, 'bad'); });
 }

@@ -245,15 +245,24 @@
      * document reprinted a year later has to show the details it was issued
      * with, and printing must not depend on Xero being reachable. */
     syncBrandOwnerFromXero: function (id, x) {
-      return sb.from('brand_owners').update({
-        email: x.email || null,
-        address: x.address || null,
-        phone: x.phone || null,
-        tax_no: x.taxNumber || null,
-        bank_account_no: x.bankAccountDetails || null,
-        xero_synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }).eq('id', id).then(function (r) { fail('Save Xero details', r.error); return true; });
+      /* Only what Xero actually holds a value for. A blank field on the Xero
+       * contact means Xero has nothing to say about it, not that the answer is
+       * nothing - writing the blank through would let a pull erase something
+       * typed here, which is the same way the master import used to empty a
+       * column. What is missing is reported to the operator instead. */
+      var row = { xero_synced_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString() };
+      var take = {
+        email: 'email', address: 'address', phone: 'phone',
+        companyNumber: 'brn', taxNumber: 'tax_no',
+        bankAccountDetails: 'bank_account_no'
+      };
+      Object.keys(take).forEach(function (k) {
+        var v = String(x[k] == null ? '' : x[k]).trim();
+        if (v) row[take[k]] = v;
+      });
+      return sb.from('brand_owners').update(row)
+        .eq('id', id).then(function (r) { fail('Save Xero details', r.error); return true; });
     },
 
     saveBrandOwner: function (b) {
