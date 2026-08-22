@@ -2551,6 +2551,30 @@ $('#fileMaster').onchange = function (e) {
       };
       var bo = get('Brand owners'), pr = get('Products'), ph = get('Pharmacies');
       var spl = function (v) { return String(v || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean); };
+
+      /* Which columns the sheet is actually saying something with.
+       *
+       * sheet_to_json fills every missing cell with '', so every row carries
+       * every column key and "is this field present" is always true. A column
+       * that exists but is blank all the way down then reads as "clear this
+       * for all 62 rows" - which is how a master export and re-import would
+       * have emptied every alias, since the export does not carry them and the
+       * operator does not type them. Aliases are learned on the Review tab one
+       * confirmation at a time; losing them silently is losing months of it.
+       *
+       * A column with SOME values in it is being maintained, so a blank cell
+       * there still means clear that one. A column with none is not being
+       * maintained at all, and is ignored. */
+      var supplied = function (rows) {
+        var live = {};
+        (rows || []).forEach(function (row) {
+          Object.keys(row).forEach(function (k) {
+            if (String(row[k] == null ? '' : row[k]).trim()) live[k] = true;
+          });
+        });
+        return live;
+      };
+      var boCols = supplied(bo), phCols = supplied(ph);
       /* This used to replace the three collections in memory and call save(),
          which writes settings - so an entire master-data import was announced
          as successful and then lost on the next reload. Each row is written
@@ -2568,7 +2592,7 @@ $('#fileMaster').onchange = function (e) {
           var row = { id: have && have.id, code: r.code, name: r.name, active: true };
           if (r.xeroContact || !have) row.xeroContact = r.xeroContact || r.name;
           ['email', 'brn', 'taxNo', 'bankName', 'bankAccountName', 'bankAccountNo']
-            .forEach(function (k) { if (k in r) row[k] = r[k]; });
+            .forEach(function (k) { if (boCols[k]) row[k] = r[k]; });
           return DB.saveBrandOwner(row);
         });
       });
@@ -2583,9 +2607,9 @@ $('#fileMaster').onchange = function (e) {
             active: true
           };
           ['tin', 'brn', 'email', 'state'].forEach(function (k) {
-            if (k in r) prow[k] = r[k];
+            if (phCols[k]) prow[k] = r[k];
           });
-          if ('aliases' in r) prow.aliases = spl(r.aliases);
+          if (phCols.aliases) prow.aliases = spl(r.aliases);
           return DB.savePharmacy(prow);
         });
       });
