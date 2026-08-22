@@ -1084,6 +1084,7 @@
             kv('Reference', P.code) +
             (B.address ? '<div><span>Address</span><b>' +
               lines(B.address).map(esc).join('<br>') + '</b></div>' : '') +
+            kv('Company no.', B.brn) +
             kv('Tax no.', B.taxNo) +
             bank +
           '</div>' +

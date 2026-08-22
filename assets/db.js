@@ -48,6 +48,37 @@
     e.code = error.code; e.details = error.details;
     throw e;
   }
+  /* Only the columns the caller actually supplied.
+   *
+   * The save functions used to build a complete row every time, so any caller
+   * that did not mention a column set it to null. The master xlsx import is
+   * exactly such a caller - it carries six columns against a table of a dozen -
+   * so exporting the master data and importing it back emptied every pharmacy
+   * registration number, every brand owner's bank details, and both tracking
+   * options. Nothing said so; the fields were simply gone next month.
+   *
+   * One field, state, was hand-preserved at that call site, which shows the
+   * trap was already known. Preserving them one at a time only works until the
+   * next column is added, so the answer is for the data layer not to write a
+   * column it was told nothing about.
+   *
+   * To clear one deliberately, pass it: '' becomes null, as it did before.
+   *
+   * `spec` maps the shape the app uses to the columns the database has. A
+   * value of true means store it as given; 'blank' means an empty string is a
+   * cleared column rather than an empty one. */
+  function pick(src, spec) {
+    var row = {};
+    Object.keys(spec).forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) return;
+      var s = spec[k];
+      var col = typeof s === 'string' ? s : s[0];
+      var blank = typeof s !== 'string' && s[1] === 'blank';
+      row[col] = blank ? (src[k] === '' || src[k] == null ? null : src[k]) : src[k];
+    });
+    return row;
+  }
+
   function rows(res, where) { fail(where, res.error); return res.data || []; }
   function one(res, where) { fail(where, res.error); return res.data; }
 
@@ -161,7 +192,8 @@
               xeroContact: b.xero_contact, email: b.email || '',
               bankName: b.bank_name || '', bankAccountName: b.bank_account_name || '',
               bankAccountNo: b.bank_account_no || '',
-              address: b.address || '', phone: b.phone || '', taxNo: b.tax_no || '',
+              address: b.address || '', phone: b.phone || '',
+              brn: b.brn || '', taxNo: b.tax_no || '',
               xeroSyncedAt: b.xero_synced_at || null,
               trackingOption: b.tracking_option || '', active: b.active
             };
@@ -179,13 +211,15 @@
     },
 
     savePharmacy: function (p) {
-      var row = {
-        code: p.code, contact: p.contact, trading: p.trading,
-        tin: p.tin || null, brn: p.brn || null, email: p.email || null,
-        state: p.state || null, tracking_option: p.trackingOption || null,
-        aliases: p.aliases || [], active: p.active !== false,
-        updated_at: new Date().toISOString()
-      };
+      var row = pick(p, {
+        code: 'code', contact: 'contact', trading: 'trading',
+        tin: ['tin', 'blank'], brn: ['brn', 'blank'], email: ['email', 'blank'],
+        state: ['state', 'blank'], trackingOption: ['tracking_option', 'blank'],
+        town: ['town', 'blank'], lat: 'lat', lng: 'lng',
+        aliases: 'aliases'
+      });
+      if (Object.prototype.hasOwnProperty.call(p, 'active')) row.active = p.active !== false;
+      row.updated_at = new Date().toISOString();
       var q = p.id ? sb.from('pharmacies').update(row).eq('id', p.id).select().single()
         : sb.from('pharmacies').insert(row).select().single();
       return q.then(function (r) { return one(r, 'Save pharmacy'); });
@@ -223,16 +257,17 @@
     },
 
     saveBrandOwner: function (b) {
-      var row = {
-        code: b.code, name: b.name, xero_contact: b.xeroContact,
-        email: b.email || null, tracking_option: b.trackingOption || null,
-        bank_name: b.bankName || null,
-        bank_account_name: b.bankAccountName || null,
-        bank_account_no: b.bankAccountNo || null,
-        address: b.address || null, phone: b.phone || null, tax_no: b.taxNo || null,
-        active: b.active !== false,
-        updated_at: new Date().toISOString()
-      };
+      var row = pick(b, {
+        code: 'code', name: 'name', xeroContact: 'xero_contact',
+        email: ['email', 'blank'], trackingOption: ['tracking_option', 'blank'],
+        bankName: ['bank_name', 'blank'],
+        bankAccountName: ['bank_account_name', 'blank'],
+        bankAccountNo: ['bank_account_no', 'blank'],
+        address: ['address', 'blank'], phone: ['phone', 'blank'],
+        brn: ['brn', 'blank'], taxNo: ['tax_no', 'blank']
+      });
+      if (Object.prototype.hasOwnProperty.call(b, 'active')) row.active = b.active !== false;
+      row.updated_at = new Date().toISOString();
       var q = b.id ? sb.from('brand_owners').update(row).eq('id', b.id).select().single()
         : sb.from('brand_owners').insert(row).select().single();
       return q.then(function (r) { return one(r, 'Save brand owner'); });
@@ -243,11 +278,12 @@
     },
 
     saveProduct: function (p) {
-      var row = {
-        sku: p.sku || null, name: p.name, brand_owner_id: p.brandOwnerId,
-        aliases: p.aliases || [], active: p.active !== false,
-        updated_at: new Date().toISOString()
-      };
+      var row = pick(p, {
+        sku: ['sku', 'blank'], name: 'name', brandOwnerId: 'brand_owner_id',
+        aliases: 'aliases'
+      });
+      if (Object.prototype.hasOwnProperty.call(p, 'active')) row.active = p.active !== false;
+      row.updated_at = new Date().toISOString();
       var q = p.id ? sb.from('products').update(row).eq('id', p.id).select().single()
         : sb.from('products').insert(row).select().single();
       return q.then(function (r) { return one(r, 'Save product'); });

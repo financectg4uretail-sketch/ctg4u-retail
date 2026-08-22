@@ -145,8 +145,10 @@
   <div class="card">
     <h2>Brand owners</h2>
     <div class="hint">Who the goods belong to. Each one gets its own statement, its own fee invoice and its own payout bill.
-      The address, tax number and bank account below are printed on the statement &mdash; pull them from the Xero
-      contact rather than typing them twice.</div>
+      The registration number, tax number, address and bank account are printed on the statement. Pull them from
+      the Xero contact rather than typing them twice &mdash; except the <b>registration number</b>, which a Xero
+      contact does not hold, and the <b>bank name</b> and <b>account holder</b>, which Xero also has no field for.
+      The address is not shown here because it belongs in Xero; correct it there and pull again.</div>
     <div class="scroll"><table id="tblProjects"></table></div>
     <div class="row" style="margin-top:12px">
       <button class="btn sm ro-only" onclick="pullBrandOwnerDetails()">⭳ Pull details from Xero</button>
@@ -271,9 +273,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=d8d49ff4fd"></script>
+<script src="assets/db.js?v=72072a6036"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=4d2c9b2ee7"></script>
+<script src="assets/calc.js?v=8201d9680a"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -294,7 +296,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '174d4dbcaae0';
+  var MINE = 'f3d41390fd85';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2286,11 +2288,14 @@ function renderProjects() {
      owner can check where the payout is going before it goes rather than
      after. A blank set is called out on the statement itself. */
   t.innerHTML = '<tr><th>Code</th><th>Brand owner name</th><th>Xero contact (must match Xero)</th>' +
-    '<th>Email</th><th>Bank</th><th>Name in bank account</th><th>Account no.</th><th></th></tr>' +
+    '<th>Email</th><th>Business reg. no.</th><th>Tax no.</th>' +
+    '<th>Bank</th><th>Name in bank account</th><th>Account no.</th><th></th></tr>' +
     ST.master.projects.map(function (p, i) {
       return '<tr>' +
         ed('projects', i, 'code', p.code, 'BO-001') + ed('projects', i, 'name', p.name, 'Legal name') +
         ed('projects', i, 'xeroContact', p.xeroContact, 'exact Xero contact') + ed('projects', i, 'email', p.email, '') +
+        ed('projects', i, 'brn', p.brn, 'typed - Xero has none') +
+        ed('projects', i, 'taxNo', p.taxNo, 'from Xero') +
         ed('projects', i, 'bankName', p.bankName, 'e.g. MAYBANK') +
         ed('projects', i, 'bankAccountName', p.bankAccountName, 'as the bank holds it') +
         ed('projects', i, 'bankAccountNo', p.bankAccountNo, '') +
@@ -2512,12 +2517,22 @@ function exportMaster() {
   var s = function (n, cols, arr) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cols].concat(arr)), n);
   };
-  s('Brand owners', ['code', 'name', 'xeroContact', 'email'],
-    ST.master.projects.map(function (p) { return [p.code, p.name, p.xeroContact, p.email]; }));
+  /* Everything the statement prints, so the sheet can be filled in bulk and
+     brought back. The import writes only the columns it finds, so a sheet with
+     fewer of them leaves the rest alone. */
+  s('Brand owners', ['code', 'name', 'xeroContact', 'email', 'brn', 'taxNo',
+                     'bankName', 'bankAccountName', 'bankAccountNo'],
+    ST.master.projects.map(function (p) {
+      return [p.code, p.name, p.xeroContact, p.email, p.brn, p.taxNo,
+              p.bankName, p.bankAccountName, p.bankAccountNo];
+    }));
   s('Products', ['sku', 'name', 'project', 'price', 'aliases'],
     ST.master.products.map(function (p) { return [p.sku, p.name, p.project, p.price, (p.aliases || []).join(' | ')]; }));
-  s('Pharmacies', ['code', 'trading', 'contact', 'email', 'tin', 'aliases'],
-    ST.master.pharmacies.map(function (p) { return [p.code, p.trading, p.contact, p.email, p.tin, (p.aliases || []).join(' | ')]; }));
+  s('Pharmacies', ['code', 'trading', 'contact', 'email', 'tin', 'brn', 'state', 'aliases'],
+    ST.master.pharmacies.map(function (p) {
+      return [p.code, p.trading, p.contact, p.email, p.tin, p.brn, p.state,
+              (p.aliases || []).join(' | ')];
+    }));
   XLSX.writeFile(wb, 'CTG4U_Consignment_Master.xlsx');
 }
 function importMasterPick() { $('#fileMaster').click(); }
@@ -2544,11 +2559,14 @@ $('#fileMaster').onchange = function (e) {
         if (!r.code || !r.name) return;
         var have = ST.master.projects.filter(function (x) { return x.code === r.code; })[0];
         jobs.push(function () {
-          return DB.saveBrandOwner({
-            id: have && have.id, code: r.code, name: r.name,
-            xeroContact: r.xeroContact || r.name, email: r.email || '',
-            trackingOption: (have && have.trackingOption) || '', active: true
-          });
+          /* Only what the sheet actually carries. A column the sheet omits is
+             left alone by the data layer, so an older export cannot empty a
+             field that was added since. */
+          var row = { id: have && have.id, code: r.code, name: r.name, active: true };
+          if (r.xeroContact || !have) row.xeroContact = r.xeroContact || r.name;
+          ['email', 'brn', 'taxNo', 'bankName', 'bankAccountName', 'bankAccountNo']
+            .forEach(function (k) { if (k in r) row[k] = r[k]; });
+          return DB.saveBrandOwner(row);
         });
       });
 
@@ -2556,13 +2574,16 @@ $('#fileMaster').onchange = function (e) {
         if (!r.code || !(r.contact || r.trading)) return;
         var have = ST.master.pharmacies.filter(function (x) { return x.code === r.code; })[0];
         jobs.push(function () {
-          return DB.savePharmacy({
+          var prow = {
             id: have && have.id, code: r.code,
             contact: r.contact || r.trading, trading: r.trading || r.contact,
-            tin: r.tin || '', brn: r.brn || '', email: r.email || '',
-            state: r.state || (have && have.state) || '',
-            aliases: spl(r.aliases), active: true
+            active: true
+          };
+          ['tin', 'brn', 'email', 'state'].forEach(function (k) {
+            if (k in r) prow[k] = r[k];
           });
+          if ('aliases' in r) prow.aliases = spl(r.aliases);
+          return DB.savePharmacy(prow);
         });
       });
 
