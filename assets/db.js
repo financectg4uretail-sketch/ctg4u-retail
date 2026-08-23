@@ -79,6 +79,47 @@
     return row;
   }
 
+  /* Rows for a bulk upsert, and the columns it refuses to touch.
+   *
+   * pick() protects a single save: a key the caller did not supply is not
+   * written, so saving one field cannot blank another. A bulk upsert had no
+   * such protection - it wrote every column unconditionally, turning an absent
+   * field into null. Restoring a backup taken before TIN and BRN existed would
+   * therefore have erased the TIN and BRN of every pharmacy in it, along with
+   * every alias the operator had taught it, and reported success.
+   *
+   * A bulk upsert is one statement, so its columns have to be the same for
+   * every row - there is no per-row "leave this alone". The conservative
+   * reading is the one taken here: a column is written only if EVERY row in the
+   * batch has something to say about it. A file that never mentions TIN cannot
+   * clear anyone's TIN, and a file that mentions it for only some rows does not
+   * get to null the rest. Setting one pharmacy's field is what the single-row
+   * save is for.
+   *
+   * What was left alone is returned rather than assumed, because a quiet import
+   * that skipped half the columns is its own kind of surprise. */
+  function bulkRows(list, spec) {
+    var keys = Object.keys(spec);
+    var use = keys.filter(function (k) {
+      return list.length && list.every(function (o) {
+        return o && Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
+      });
+    });
+    var skipped = keys.filter(function (k) { return use.indexOf(k) < 0; })
+      .map(function (k) { return typeof spec[k] === 'string' ? spec[k] : spec[k][0]; });
+    return {
+      rows: list.map(function (o) {
+        var row = {};
+        use.forEach(function (k) {
+          var col = typeof spec[k] === 'string' ? spec[k] : spec[k][0];
+          row[col] = o[k] === '' ? null : o[k];
+        });
+        return row;
+      }),
+      skipped: skipped
+    };
+  }
+
   function rows(res, where) { fail(where, res.error); return res.data || []; }
   function one(res, where) { fail(where, res.error); return res.data; }
 
@@ -225,19 +266,30 @@
       return q.then(function (r) { return one(r, 'Save pharmacy'); });
     },
 
-    /* Bulk upsert on code — used by the seed import and the master xlsx import.
+    /* Bulk upsert on code — used by the seed import and the master import.
      * Existing rows keep their id, so nothing that references them breaks. */
     upsertPharmacies: function (list) {
+      var b = bulkRows(list, {
+        code: 'code', contact: 'contact', trading: 'trading',
+        tin: 'tin', brn: 'brn', email: 'email', state: 'state',
+        town: 'town', lat: 'lat', lng: 'lng',
+        aliases: 'aliases', trackingOption: 'tracking_option', active: 'active'
+      });
+      /* What was left alone rides back on the result so the caller can tell the
+         operator. A file that silently updated three columns out of eight is a
+         surprise worth having in front of them, not in a console they will
+         never open. */
+      if (!b.rows.length) {
+        var none = []; none.skippedColumns = b.skipped; return Promise.resolve(none);
+      }
       var now = new Date().toISOString();
-      return sb.from('pharmacies').upsert(list.map(function (p) {
-        return {
-          code: p.code, contact: p.contact, trading: p.trading,
-          tin: p.tin || null, brn: p.brn || null, email: p.email || null,
-          state: p.state || null, aliases: p.aliases || [], active: p.active !== false,
-          updated_at: now
-        };
-      }), { onConflict: 'code' }).select()
-        .then(function (r) { return rows(r, 'Import pharmacies'); });
+      b.rows.forEach(function (r) { r.updated_at = now; });
+      return sb.from('pharmacies').upsert(b.rows, { onConflict: 'code' }).select()
+        .then(function (r) {
+          var out = rows(r, 'Import pharmacies');
+          out.skippedColumns = b.skipped;
+          return out;
+        });
     },
 
     /* A brand owner's details as Xero holds them, written with the moment they

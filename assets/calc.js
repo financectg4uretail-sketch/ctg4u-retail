@@ -46,18 +46,69 @@
 
   function tokens(s) { return normKey(s).split(' ').filter(Boolean); }
 
-  // 0..1 similarity: exact > containment > token overlap (Jaccard).
+  /* 0..1 similarity: exact > containment > token overlap (Jaccard).
+   *
+   * Containment is worth only what the lengths justify. It used to be a flat
+   * 0.9 - comfortably above the threshold at which a match is applied without
+   * asking - and normKey drops SDN BHD, so a pharmacy registered as WELL
+   * PHARMACY SDN BHD normalises to "WELL PHARMACY" and is a substring of every
+   * other WELL PHARMACY branch in the master. Type a branch that is not in the
+   * master yet and the shortest name in the family won at 0.9, which is how a
+   * newly opened branch's sales get invoiced to a different company that merely
+   * shares a stem. The real sixty-two never showed it because an exact match
+   * scores 1.0 and beats it - the damage only appears for a name nobody has
+   * added, which is exactly when nobody is watching for it.
+   *
+   * Scaling by the length ratio says the honest thing: a short name sitting
+   * inside a much longer one is weak evidence, not near-identity. The token
+   * overlap is still taken when it is the better of the two, so shortening a
+   * name rather than adding to it is unaffected. */
   function similarity(a, b) {
     var A = normKey(a), B = normKey(b);
     if (!A || !B) return 0;
     if (A === B) return 1;
-    if (A.indexOf(B) >= 0 || B.indexOf(A) >= 0) return 0.9;
+
+    /* Same name, different idea of where the spaces go.
+     *
+     * normKey turns punctuation into spaces, so the real product Zeero-Basic-A-1
+     * becomes "ZEERO BASIC A 1" while a pharmacy typing Zeero Basic A1 gives
+     * "ZEERO BASIC A1". Compared as tokens those share only two of five and
+     * score 0.4 - nowhere near a match - so the line arrives unattributed and
+     * has to be resolved by hand every month. MIZINO PLACENTA 30S against
+     * MIZINO PLACENTA 30 S fails the same way.
+     *
+     * Where the spaces fall is not information about which product this is, so
+     * comparing with them removed says what a reader would: these are the same
+     * name. Kept just below an exact match, since the strings did differ. */
+    if (A.replace(/ /g, '') === B.replace(/ /g, '')) return 0.98;
+
     var ta = tokens(A), tb = tokens(B);
     if (!ta.length || !tb.length) return 0;
     var setB = {}, hit = 0;
     for (var i = 0; i < tb.length; i++) setB[tb[i]] = 1;
     for (var j = 0; j < ta.length; j++) if (setB[ta[j]]) hit++;
-    return hit / (ta.length + tb.length - hit);
+    var overlap = hit / (ta.length + tb.length - hit);
+
+    if (A.indexOf(B) >= 0 || B.indexOf(A) >= 0) {
+      /* Sub-linear in what is missing, because the two ends of this are not
+       * symmetrical. Dropping a pack size - MIZINO PLACENTA for MIZINO PLACENTA
+       * 30S - is the commonest way a pharmacy types a product and barely weakens
+       * the evidence. A name that is only a small fragment of another - WELL
+       * PHARMACY inside WELL PHARMACY ALLIANCE (TAMAN MOUNT AUSTIN) - is weak
+       * evidence however neatly it sits inside.
+       *
+       * Scaling straight by the ratio treats those the same way and put the
+       * dropped pack size at 0.71, a hundredth under the bar, which would have
+       * meant confirming by hand most of the lines in a month. The square root
+       * keeps it comfortably matched while leaving the fragment far below.
+       *
+       * Being generous at the top is only safe because ambiguity is caught
+       * separately: if two products both contain the typed name they score the
+       * same, tie, and resolveLines refuses rather than picking the first. */
+      var ratio = Math.min(A.length, B.length) / Math.max(A.length, B.length);
+      return Math.max(overlap, 0.9 * Math.sqrt(ratio));
+    }
+    return overlap;
   }
 
   /* Best match in `list` for `needle`; `fields` are candidate name properties.
@@ -655,6 +706,115 @@
     return out;
   }
 
+  /* Hold a run against what the organisation actually has, before anything is
+   * created. Pure: `org` is what the connector's `check` action returns, and
+   * the answer is a list of findings the caller renders however it likes.
+   *
+   * This is the decision half of the pre-flight, kept out of the page so it can
+   * be tested. A last-mile check that is itself untested is worth very little.
+   *
+   * Xero refuses a line carrying an account code or a tracking option it does
+   * not have, and it refuses them ONE LINE AT A TIME - so a single mis-spelling
+   * loses that brand owner's reporting while the rest of the month looks like
+   * it worked. That is the failure this exists to catch. */
+  function xeroPreflight(org, settlement, billing, c) {
+    c = cfg(c);
+    org = org || {};
+    var accounts = {}, tax = {}, cats = {};
+    (org.accounts || []).forEach(function (a) { accounts[String(a.code == null ? '' : a.code).trim()] = a; });
+    (org.taxRates || []).forEach(function (t) {
+      tax[String(t.name == null ? '' : t.name).trim().toLowerCase()] = t;
+      tax[String(t.taxType == null ? '' : t.taxType).trim().toLowerCase()] = t;
+    });
+    (org.trackingCategories || []).forEach(function (t) {
+      cats[String(t.name == null ? '' : t.name).trim().toLowerCase()] =
+        (t.options || []).map(function (o) { return String(o == null ? '' : o).trim().toLowerCase(); });
+    });
+
+    var out = [];
+    var add = function (what, sends, ok, detail) {
+      out.push({ what: what, sends: sends, ok: !!ok, detail: detail || '' });
+    };
+
+    [['Pass-through account', 'acctPassThrough'],
+     ['Management fee income', 'acctMgmtIncome'],
+     ['Service fee income', 'acctServiceIncome'],
+     ['Insurance income', 'acctInsuranceIncome']].forEach(function (f) {
+      var code = String(c[f[1]] || '').trim();
+      /* insurance falls back to the service fee account, so an unset one is
+         not a finding - it is simply not used */
+      if (!code && f[1] === 'acctInsuranceIncome') return;
+      var a = accounts[code];
+      add(f[0], code, !!a, a
+        ? a.name + ' — ' + a.type + (a.status && a.status !== 'ACTIVE' ? ' (' + a.status + ')' : '')
+        : (code ? '' : 'nothing is set'));
+    });
+
+    [['Tax type for exempt lines', 'taxTypeExempt'],
+     ['Tax type for SST lines', 'taxTypeSST']].forEach(function (f) {
+      var want = String(c[f[1]] || '').trim();
+      var t = tax[want.toLowerCase()];
+      add(f[0], want, !!t, t ? t.name + ' → ' + t.taxType + ' @ ' + t.rate + '%' : '');
+    });
+
+    trackingUsed(settlement, billing, c).forEach(function (t) {
+      var opts = cats[String(t.name).trim().toLowerCase()];
+      add('Tracking: ' + t.name, t.option,
+        !!opts && opts.indexOf(String(t.option).trim().toLowerCase()) >= 0,
+        opts ? '' : 'the organisation has no category called "' + t.name + '"');
+    });
+
+    /* Every contact name these files will send.
+     *
+     * This one fails differently from the others and that is why it is worth
+     * checking. A wrong account code or tracking option makes Xero REJECT the
+     * line, loudly. A *ContactName that matches nothing is ACCEPTED: Xero
+     * creates a brand new contact under that name and posts the document
+     * against it. Nothing is rejected, nothing is reported, and the month looks
+     * like it imported perfectly - while a brand owner now has two contacts,
+     * the bill sits on the empty one with no email, no payment terms and no
+     * history, and the real one shows nothing owing.
+     *
+     * The names have to match exactly, and they come from sixty-two pharmacies
+     * and thirty-two brand owners typed at different times, so "exactly" is a
+     * real bar. Checking is only possible because the contact list has already
+     * been pulled for the Master data screen.
+     *
+     * With no contact list to compare against, this says so rather than
+     * quietly passing - the check not having run is not the same as it passing.
+     */
+    var known = null;
+    if (org.contacts && org.contacts.length) {
+      known = {};
+      org.contacts.forEach(function (x) {
+        var n = String((x && x.name != null ? x.name : x) || '').trim().toLowerCase();
+        if (n) known[n] = true;
+      });
+    }
+    var wants = [], seenName = {};
+    (settlement && settlement.projects || []).forEach(function (S) {
+      var n = S.project.xeroContact || S.project.name;
+      if (n && !seenName['b' + n]) { seenName['b' + n] = 1; wants.push(['Brand owner', n]); }
+    });
+    (billing || []).forEach(function (B) {
+      var n = B.pharmacy.contact || B.pharmacy.trading;
+      if (n && !seenName['p' + n]) { seenName['p' + n] = 1; wants.push(['Pharmacy', n]); }
+    });
+    wants.forEach(function (w) {
+      if (!known) {
+        add('Contact: ' + w[0], w[1], false,
+          'no contact list has been pulled from Xero, so this cannot be checked - ' +
+          'import it on the Master data tab');
+        return;
+      }
+      var hit = known[String(w[1]).trim().toLowerCase()];
+      add('Contact: ' + w[0], w[1], !!hit,
+        hit ? '' : 'Xero has no contact with this exact name and would create a new one');
+    });
+
+    return { findings: out, bad: out.filter(function (x) { return !x.ok; }).length };
+  }
+
   /* ------------------------------------------------------- Xero CSV out */
 
   function invNo(prefix, period, seq) {
@@ -1121,13 +1281,27 @@
 
   /* Full printable document. Document numbers are stamped first so the statement
    * quotes the same invoice/bill numbers the CSVs carry. */
-  function statementDoc(settlement, c) {
+  /* The printable statement, as one document.
+   *
+   * `only` prints a single brand owner by index; leave it out for all of them.
+   * Either way the numbering runs over the WHOLE settlement first, because
+   * xeroServiceInvoices and xeroPayoutBills are what stamp serviceInvoiceNumber
+   * and payoutBillNumber onto each project, and the statement prints those
+   * numbers so the brand owner can tie the page to the documents in Xero.
+   * Numbering only the one being printed would restart the sequence at 0001 and
+   * quote numbers that belong to somebody else.
+   *
+   * This can throw: an unset account code stops the builders, deliberately. The
+   * caller opens a window, so it has to be given the chance to not open one. */
+  function statementDoc(settlement, c, only) {
     c = cfg(c);
     xeroServiceInvoices(settlement, c);
     xeroPayoutBills(settlement, c);
+    var show = (only == null || only < 0) ? settlement.projects
+      : [settlement.projects[only]].filter(Boolean);
     return '<!doctype html><html><head><meta charset="utf-8"><title>Consignment Settlement ' +
       esc(periodLabel(c.period)) + '</title><style>' + STMT_CSS + '</style></head><body>' +
-      settlement.projects.map(function (P) { return statementHTML(P, c); }).join('') +
+      show.map(function (P) { return statementHTML(P, c); }).join('') +
       '</body></html>';
   }
 
@@ -1301,6 +1475,27 @@
         ', ' + money(Math.abs(out.roundingDiff)) + ' ' +
         (out.roundingDiff < 0 ? 'below' : 'above') + ' the ' + money(net) + ' on the sheet');
     }
+    /* A sheet that states nothing cannot be checked, and that is not the same
+     * as a sheet that checks out.
+     *
+     * Every comparison below is guarded on the figure being present, so a sheet
+     * whose totals block was never read produced no problems at all and came
+     * back ok - reported on screen as agreeing with the pharmacy's own figures,
+     * when in truth there were no figures of its own to agree with. The whole
+     * point of this function is that the pharmacy totalled the sheet
+     * independently; with that gone there is nothing holding the parse honest,
+     * and how the rows were read is exactly what can go wrong.
+     *
+     * These sheets come off a standard template and always carry Total Sales
+     * and Billing, so one arriving without them means it was trimmed, or it is
+     * laid out differently and was read wrongly. Either way the sheet, not the
+     * month, is what needs fixing. */
+    if (parsed.stated.totalSales == null && parsed.stated.billing == null) {
+      out.problems.push('this sheet carries no Total Sales or Billing of its own, ' +
+        'so there is nothing to check how it was read - ask the pharmacy for the ' +
+        'sheet with its totals block');
+    }
+
     if (parsed.stated.totalSales != null &&
         Math.abs(r2(gross - parsed.stated.totalSales)) >= 0.01) {
       out.problems.push('the sheet states Total Sales ' + money(parsed.stated.totalSales) +
@@ -1416,9 +1611,18 @@
     out.date = pick(function (s) { return s.dateRate * 1.0 + hw(s, ['date', 'tarikh', '日期'], 0.25); }, taken);
     if (out.date != null) taken.push(out.date);
 
+    /* A column whose header says PHARMACY is the pharmacy column even when not
+     * one name in it is recognised - especially then. The nudge used to be 0.3
+     * against a 0.35 bar, so a sheet naming shops that are not in the master
+     * data scored 0.30, the column was discarded, and every row fell back to
+     * the pharmacy the TAB is named after. Rows belonging to one shop were
+     * billed to another, silently, and the only sheets it could happen to were
+     * the ones nobody recognised - which is exactly when someone should look.
+     * Trust the header; let the unknown names surface on Review instead. */
     out.pharmacy = pick(function (s) {
-      return s.pharmRate * 1.0 + hw(s, ['pharmacy', 'outlet', 'branch', 'store', 'customer', '药房'], 0.3)
-        * (s.numRate > 0.8 ? 0 : 1);
+      var named = hw(s, ['pharmacy', 'outlet', 'branch', 'store', 'customer', '药房'], 1);
+      if (named && s.numRate <= 0.8) return 1 + s.pharmRate;
+      return s.pharmRate * 1.0;
     }, taken);
     if (out.pharmacy != null) taken.push(out.pharmacy);
 
@@ -1485,6 +1689,7 @@
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,
+    xeroPreflight: xeroPreflight,
     statementHTML: statementHTML, statementDoc: statementDoc, STMT_CSS: STMT_CSS, esc: esc,
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,

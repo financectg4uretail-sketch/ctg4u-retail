@@ -276,9 +276,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=89d066f3cd"></script>
+<script src="assets/db.js?v=c0437fc998"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=8201d9680a"></script>
+<script src="assets/calc.js?v=e9b0016201"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -299,7 +299,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '94fcfb9deea8';
+  var MINE = '6e4e42ee2c13';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1639,9 +1639,9 @@ function renderPackages() {
     '</div>';
 
   if (broken.length) {
-    h += '<div class="note warn"><b>' + broken.length + ' sheet(s) do not agree with their own totals.</b> ' +
-      'Nothing from these is billed. Either the sheet was changed after it was totalled, or it is laid out ' +
-      'differently from the rest.' +
+    h += '<div class="note warn"><b>' + broken.length + ' sheet(s) did not pass the check against their own totals.</b> ' +
+      'Nothing from these is billed. Either the sheet disagrees with the totals it carries, it carries ' +
+      'none at all, or it is laid out differently from the rest.' +
       '<div class="scroll" style="max-height:200px;margin-top:9px"><table><tr><th>Sheet</th><th>Problem</th></tr>' +
       broken.map(function (r) {
         return '<tr><td>' + esc(r.P.name) + '</td><td>' + r.x.problems.map(esc).join('<br>') + '</td></tr>';
@@ -2126,13 +2126,42 @@ function renderOut() {
     host.innerHTML = '<div class="card"><div class="hint">Nothing to export yet.</div></div>'; return;
   }
   var c = ST.cfg, S = ST.settlement;
-  var pharmT = CB.xeroPharmacyInvoices(ST.billing, c);
-  var svcT = CB.xeroServiceInvoices(S, c);
-  var billT = CB.xeroPayoutBills(S, c);
+
+  /* calc.js refuses to build a line with no account code on it, which is the
+     right answer to a setting Xero would reject anyway - but this page called
+     the builders straight out, so an exception here left the tab blank with
+     nothing said. A missing setting has to read as a missing setting. */
+  var pharmT, svcT, billT;
+  try {
+    pharmT = CB.xeroPharmacyInvoices(ST.billing, c);
+    svcT = CB.xeroServiceInvoices(S, c);
+    billT = CB.xeroPayoutBills(S, c);
+  } catch (e) {
+    host.innerHTML =
+      '<div class="card"><h2>Nothing can be built yet</h2>' +
+      '<div class="note bad">' + esc(e.message) + '</div>' +
+      '<div class="row" style="margin-top:12px">' +
+      '<button class="btn" onclick="go(&#39;cfg&#39;)">Open Settings</button></div></div>';
+    return;
+  }
 
   var t = CB.sumMoney(S.projects, function (p) { return p.totalPayout; });
   host.innerHTML =
     '<div class="card">' + ckBanner() + '</div>' +
+    /* Everything this run is about to name in Xero, held against what Xero
+       actually has, BEFORE anything is created. The connector could already
+       read all of it and calc.js could already list what a run needs; neither
+       was reachable from here, so the first time a wrong account code or a
+       missing tracking option showed up was when Xero rejected a finished
+       month. */
+    '<div class="card"><h2>Check against Xero</h2>' +
+    '<div class="hint">Reads the organisation and holds this month against it &mdash; the account ' +
+    'codes, the tax rates, and every tracking option these ' + S.projects.length +
+    ' brand owner(s) will be tagged with. Nothing is created. Worth doing once before the ' +
+    'first real month, and after anyone changes the chart of accounts.</div>' +
+    '<div class="row"><button class="btn sm" data-xero-read data-label="&#10547; Check this month against Xero" ' +
+    'onclick="xeroPreflight(this)">&#10547; Check this month against Xero</button></div>' +
+    '<div id="xeroPre"></div></div>' +
     '<div class="card"><h2>Finalise this month</h2>' +
     '<div class="hint">Until you finalise, these are draft figures and the invoice numbers below are only a preview.' +
     ' Finalising reserves the real numbers from the shared database, stores the run, and closes ' +
@@ -2218,70 +2247,144 @@ function outCard(t, sub, amt, note, fn) {
 function fname(kind, ext) {
   return 'CTG4U_' + kind + '_' + CB.periodYYMM(ST.cfg.period) + '.' + ext;
 }
-function dlPharm() { dl(fname('Pharmacy_Invoices', 'csv'), CB.toCSV(CB.xeroPharmacyInvoices(ST.billing, ST.cfg))); }
-function dlSvc() { dl(fname('BrandOwner_Fee_Invoices', 'csv'), CB.toCSV(CB.xeroServiceInvoices(ST.settlement, ST.cfg))); }
-function dlBill() { dl(fname('BrandOwner_Payout_Bills', 'csv'), CB.toCSV(CB.xeroPayoutBills(ST.settlement, ST.cfg))); }
+/* Each of these can refuse - an account code that is not set stops the build -
+   and a button that silently does nothing is worse than one that says why. */
+function guarded(fn) {
+  try { fn(); } catch (e) { err(e); toast(e.message, 'bad'); }
+}
+function dlPharm() { guarded(function () {
+  dl(fname('Pharmacy_Invoices', 'csv'), CB.toCSV(CB.xeroPharmacyInvoices(ST.billing, ST.cfg))); }); }
+function dlSvc() { guarded(function () {
+  dl(fname('BrandOwner_Fee_Invoices', 'csv'), CB.toCSV(CB.xeroServiceInvoices(ST.settlement, ST.cfg))); }); }
+function dlBill() { guarded(function () {
+  dl(fname('BrandOwner_Payout_Bills', 'csv'), CB.toCSV(CB.xeroPayoutBills(ST.settlement, ST.cfg))); }); }
+
+/* --------------------------------------------------- Xero pre-flight */
+
+/* Hold this month against the organisation before anything is created.
+ *
+ * The connector has always been able to read the org's tax rates, accounts and
+ * tracking categories, and calc.js has always been able to list every pair a
+ * run will use. Neither was wired to anything, so a wrong account code or a
+ * tracking option spelled differently in Xero was discovered by Xero rejecting
+ * a month that had already been finalised - as far from the cause as it gets. */
+function xeroPreflight(btn) {
+  if (!ST.settlement || !ST.settlement.projects.length) { toast('Nothing to check yet', 'warn'); return; }
+  if (XERO_BUSY) { toast('A Xero read is already running - give it a moment', 'warn'); return; }
+  var host = $('#xeroPre');
+  xeroBusy(true, btn);
+  host.innerHTML = '<div class="hint" style="margin-top:12px">Reading the organisation&hellip;</div>';
+
+  DB.xero.call('check').then(function (r) {
+    /* The contact list is pulled separately, for the Master data screen, and
+       the check needs it: a *ContactName Xero does not recognise is not
+       rejected, it silently creates a second contact. Handing over whatever
+       has been pulled lets calc.js say so; handing over nothing makes it
+       report that the check could not run, which is the honest answer. */
+    r = r || {};
+    r.contacts = ST.xeroContacts || [];
+    /* The comparing is done in calc.js, where it can be tested; this only
+       draws the answer. */
+    var res = CB.xeroPreflight(r, ST.settlement, ST.billing, ST.cfg);
+    var rows = res.findings.map(function (f) {
+      return '<tr><td>' + esc(f.what) + '</td>' +
+        '<td class="mono">' + esc(f.sends || '(not set)') + '</td>' +
+        '<td><span class="badge ' + (f.ok ? 'ok' : 'bad') + '">' +
+        (f.ok ? 'in Xero' : 'NOT in Xero') + '</span>' +
+        (f.detail ? '<div class="mut">' + esc(f.detail) + '</div>' : '') + '</td></tr>';
+    }).join('');
+
+    host.innerHTML =
+      '<div class="note ' + (res.bad ? 'bad' : 'ok') + '" style="margin-top:12px"><b>' +
+      (res.bad ? res.bad + ' of ' + res.findings.length + ' would be rejected by Xero'
+               : 'All ' + res.findings.length + ' checks match the organisation') + '</b>' +
+      (res.bad ? '<div style="margin-top:6px">Fix these before finalising. Xero refuses a line ' +
+                 'carrying a code or a tracking option it does not have, and it refuses them one ' +
+                 'line at a time &mdash; so the rest of the month can look like it worked.</div>' : '') +
+      '</div>' +
+      '<div class="scroll" style="margin-top:10px"><table>' +
+      '<tr><th>What</th><th>This month sends</th><th>The organisation</th></tr>' +
+      rows + '</table></div>';
+    toast(res.bad ? res.bad + ' setting(s) do not exist in Xero'
+                  : 'Everything this month sends exists in Xero', res.bad ? 'bad' : 'ok');
+  }).catch(function (e) {
+    err(e);
+    host.innerHTML = '<div class="note bad" style="margin-top:12px">' + esc(xeroWhy(e)) + '</div>';
+    toast(xeroWhy(e), 'bad');
+  }).then(function () { xeroBusy(false, btn); }, function () { xeroBusy(false, btn); });
+}
 
 /* ---------------------------------------------------------- statement */
 function printStatement(idx) {
   var S = ST.settlement; if (!S) return;
-  var one = idx >= 0 ? { projects: [S.projects[idx]], unmapped: S.unmapped } : S;
-  // Numbering is stamped from the FULL settlement first, so a single-brand-owner
-  // print quotes the same document numbers as the CSVs, not a fresh 0001.
-  CB.xeroServiceInvoices(S, ST.cfg); CB.xeroPayoutBills(S, ST.cfg);
+  /* The document is built by calc.js, not assembled here. It was assembled here
+     once, as a second copy of the same markup, and a second copy is a second
+     thing to remember when the statement changes - the kind of divergence that
+     shows up as a brand owner receiving a page that does not match the one on
+     screen. Numbering runs over the whole settlement inside statementDoc, so a
+     single-brand-owner print still quotes the real document numbers.
+     It can refuse - an unset account code stops the build - and a pop-up that
+     opens onto nothing is the worst way to find that out, so build before
+     opening the window. */
+  var doc;
+  try { doc = CB.statementDoc(S, ST.cfg, idx); }
+  catch (e) { err(e); toast(e.message, 'bad'); return; }
   var w = window.open('', '_blank');
   if (!w) { toast('Pop-up blocked — allow pop-ups for this page, then try again', 'bad'); return; }
-  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Consignment Settlement ' +
-    esc(CB.periodLabel(ST.cfg.period)) + '</title><style>' + CB.STMT_CSS + '</style></head><body>' +
-    one.projects.map(function (P) { return CB.statementHTML(P, ST.cfg); }).join('') + '</body></html>');
+  w.document.write(doc);
   w.document.close();
   setTimeout(function () { w.focus(); w.print(); }, 350);
 }
 
 /* --------------------------------------------------------- workbook */
 function dlWorkbook() {
-  var c = ST.cfg, S = ST.settlement;
-  var wb = XLSX.utils.book_new();
-  var add = function (name, aoa) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name.slice(0, 31)); };
-
-  add('Summary', [['CTG4U RETAIL SDN BHD — Consignment settlement'], ['Period', CB.periodLabel(c.period)], [],
-    ['Brand owner', 'Pharmacies', 'Sales Amount', 'Discount ' + c.discountPct + '%', 'Net Sales',
-      'Mgmt Fee', 'Service Fee ' + c.serviceFeePct + '%', 'SST ' + c.sstPct + '%', 'Total Payout',
-      'Fee invoice', 'Payout bill']]
-    .concat(S.projects.map(function (P) {
-      return [P.project.name, P.pharmacyCount, P.salesAmount, P.discount, P.netSales,
-        P.mgmtFee, P.serviceFee, P.sst, P.totalPayout, P.serviceInvoiceNumber || '', P.payoutBillNumber || ''];
-    }))
-    .concat([['TOTAL', '', CB.sumMoney(S.projects, function (p) { return p.salesAmount; }),
-      CB.sumMoney(S.projects, function (p) { return p.discount; }), CB.sumMoney(S.projects, function (p) { return p.netSales; }),
-      CB.sumMoney(S.projects, function (p) { return p.mgmtFee; }), CB.sumMoney(S.projects, function (p) { return p.serviceFee; }),
-      CB.sumMoney(S.projects, function (p) { return p.sst; }), CB.sumMoney(S.projects, function (p) { return p.totalPayout; })]]));
-
-  add('By pharmacy', [['Brand owner', 'Pharmacy code', 'Pharmacy', 'Sales Amount', 'Discount', 'Net Sales', 'Mgmt Fee']]
-    .concat(S.projects.reduce(function (a, P) {
-      return a.concat(P.byPharmacy.map(function (B) {
-        return [P.project.name, B.pharmacy.code, B.pharmacy.trading, B.gross, B.discount, B.net, B.mgmtFee];
-      }));
-    }, [])));
-
-  add('All lines', [['Sheet', 'Row', 'Pharmacy (file)', 'Pharmacy (master)', 'Product', 'Brand owner',
-    'Qty', 'Unit price', 'Sales Amount', 'Discount', 'Net', 'Issues']]
-    .concat(ST.lines.map(function (l) {
-      return [l._sheet, l._row, l.pharmacyRaw, l.pharmacy ? l.pharmacy.trading : '', l.productRaw,
-      l.project ? l.project.name : '', l.qty, l.unitPrice, l.gross, l.discount, l.net, l.issues.join('; ')];
-    })));
-
-  [['Xero A Pharmacy Inv', CB.xeroPharmacyInvoices(ST.billing, c)],
-  ['Xero B Fee Inv', CB.xeroServiceInvoices(S, c)],
-  ['Xero C Payout Bills', CB.xeroPayoutBills(S, c)]].forEach(function (p) {
-    add(p[0], [p[1].columns].concat(p[1].rows.map(function (r) {
-      return p[1].columns.map(function (k) { return r[k]; });
-    })));
+  /* This builds the three Xero tables too, so it refuses for the same reason
+     the downloads do - and a button that throws into the console while the
+     page carries on is the least useful way to say so. */
+  guarded(function () {
+    var c = ST.cfg, S = ST.settlement;
+    var wb = XLSX.utils.book_new();
+    var add = function (name, aoa) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name.slice(0, 31)); };
+  
+    add('Summary', [['CTG4U RETAIL SDN BHD — Consignment settlement'], ['Period', CB.periodLabel(c.period)], [],
+      ['Brand owner', 'Pharmacies', 'Sales Amount', 'Discount ' + c.discountPct + '%', 'Net Sales',
+        'Mgmt Fee', 'Service Fee ' + c.serviceFeePct + '%', 'SST ' + c.sstPct + '%', 'Total Payout',
+        'Fee invoice', 'Payout bill']]
+      .concat(S.projects.map(function (P) {
+        return [P.project.name, P.pharmacyCount, P.salesAmount, P.discount, P.netSales,
+          P.mgmtFee, P.serviceFee, P.sst, P.totalPayout, P.serviceInvoiceNumber || '', P.payoutBillNumber || ''];
+      }))
+      .concat([['TOTAL', '', CB.sumMoney(S.projects, function (p) { return p.salesAmount; }),
+        CB.sumMoney(S.projects, function (p) { return p.discount; }), CB.sumMoney(S.projects, function (p) { return p.netSales; }),
+        CB.sumMoney(S.projects, function (p) { return p.mgmtFee; }), CB.sumMoney(S.projects, function (p) { return p.serviceFee; }),
+        CB.sumMoney(S.projects, function (p) { return p.sst; }), CB.sumMoney(S.projects, function (p) { return p.totalPayout; })]]));
+  
+    add('By pharmacy', [['Brand owner', 'Pharmacy code', 'Pharmacy', 'Sales Amount', 'Discount', 'Net Sales', 'Mgmt Fee']]
+      .concat(S.projects.reduce(function (a, P) {
+        return a.concat(P.byPharmacy.map(function (B) {
+          return [P.project.name, B.pharmacy.code, B.pharmacy.trading, B.gross, B.discount, B.net, B.mgmtFee];
+        }));
+      }, [])));
+  
+    add('All lines', [['Sheet', 'Row', 'Pharmacy (file)', 'Pharmacy (master)', 'Product', 'Brand owner',
+      'Qty', 'Unit price', 'Sales Amount', 'Discount', 'Net', 'Issues']]
+      .concat(ST.lines.map(function (l) {
+        return [l._sheet, l._row, l.pharmacyRaw, l.pharmacy ? l.pharmacy.trading : '', l.productRaw,
+        l.project ? l.project.name : '', l.qty, l.unitPrice, l.gross, l.discount, l.net, l.issues.join('; ')];
+      })));
+  
+    [['Xero A Pharmacy Inv', CB.xeroPharmacyInvoices(ST.billing, c)],
+    ['Xero B Fee Inv', CB.xeroServiceInvoices(S, c)],
+    ['Xero C Payout Bills', CB.xeroPayoutBills(S, c)]].forEach(function (p) {
+      add(p[0], [p[1].columns].concat(p[1].rows.map(function (r) {
+        return p[1].columns.map(function (k) { return r[k]; });
+      })));
+    });
+  
+    add('Settings', [['Setting', 'Value']].concat(Object.keys(CB.DEFAULTS).map(function (k) { return [k, c[k]]; })));
+  
+    XLSX.writeFile(wb, fname('Consignment_Report', 'xlsx'));
   });
-
-  add('Settings', [['Setting', 'Value']].concat(Object.keys(CB.DEFAULTS).map(function (k) { return [k, c[k]]; })));
-
-  XLSX.writeFile(wb, fname('Consignment_Report', 'xlsx'));
 }
 
 /* ============================================================ MASTER */
@@ -2437,7 +2540,7 @@ function renderXeroContacts() {
     chip(n.none + ' no contact in Xero', n.none ? 'bad' : '') +
     '</div>' +
 
-    (n.rename ? '<div class="row" style="margin:8px 0"><button class="btn sm" onclick="applyXeroNames(true)">' +
+    (n.rename ? '<div class="row" style="margin:8px 0"><button class="btn sm" onclick="applyXeroNames()">' +
       'Apply the ' + n.rename + ' near-exact match(es)</button>' +
       '<span class="mut">score ≥ 0.90 — same company, different punctuation or Sdn Bhd spelling</span></div>' : '') +
 
@@ -2475,12 +2578,18 @@ function setPharmContact(i, name) {
 }
 
 /* Only the near-exact ones. A 0.7 "looks similar" match is how you invoice the
- * wrong company, so those stay a manual decision. */
-function applyXeroNames(onlySafe) {
+ * wrong company, so those stay a manual decision.
+ *
+ * The risky behaviour has to be asked for by name. It used to be what you got
+ * by leaving the argument off - applyXeroNames() with no argument adopted every
+ * fuzzy suggestion at once - and the one caller passing true was all that stood
+ * between here and repointing a pharmacy at a company with a similar name. A
+ * default that dangerous should not be the one you get by forgetting. */
+function applyXeroNames(includeLikelyLooking) {
   if (!requireWrite()) return;
   var m = CB.matchXeroContacts(ST.master.pharmacies, ST.xeroContacts || []);
   var todo = m.filter(function (x) {
-    return x.suggestion && (!onlySafe || x.state === 'rename');
+    return x.suggestion && (includeLikelyLooking === true || x.state === 'rename');
   });
   if (!todo.length) { toast('Nothing to apply'); return; }
 
@@ -2880,26 +2989,55 @@ $('#fileRestore').onchange = function (e) {
 
 /* Pharmacies upsert on code, then brand owners, then products - a product
  * cannot be written before the brand owner it points at exists. */
+/* A row that fails to save is skipped so the rest of the file still lands -
+ * stopping at the first bad row would leave the import half done with no way to
+ * resume. But skipping quietly is how a master import reports success having
+ * written thirty of thirty-two brand owners, and the two that vanished are
+ * found weeks later as lines that will not attribute. Every failure is counted,
+ * named, and put in front of the operator. */
 function importMasterData(d) {
   var m = d.master;
+  var failed = [], skippedCols = [];
+  function note(what, row) {
+    return function (e) {
+      failed.push(what + ' ' + (row.code || row.sku || row.name || '?') +
+        ' — ' + (e && e.message ? e.message : String(e)));
+    };
+  }
   toast('Importing...');
   DB.upsertPharmacies(m.pharmacies || [])
+    .then(function (res) { skippedCols = (res && res.skippedColumns) || []; })
     .then(function () {
       return (m.projects || []).reduce(function (p, b) {
-        return p.then(function () { return DB.saveBrandOwner(b).catch(function () { }); });
+        return p.then(function () { return DB.saveBrandOwner(b).catch(note('brand owner', b)); });
       }, Promise.resolve());
     })
     .then(refreshMaster)
     .then(function () {
       return (m.products || []).reduce(function (p, pr) {
-        return p.then(function () { return persistRow('products', pr).catch(function () { }); });
+        return p.then(function () { return persistRow('products', pr).catch(note('product', pr)); });
       }, Promise.resolve());
     })
     .then(function () {
       if (d.cfg) { ST.cfg = CB.cfg(d.cfg); return DB.saveSettings(ST.cfg); }
     })
     .then(refreshMaster)
-    .then(function () { renderCfg(); toast('Master data imported', 'ok'); }, err);
+    .then(function () {
+      renderCfg();
+      if (skippedCols.length) {
+        toast('Imported. The file said nothing about ' + skippedCols.join(', ') +
+          ', so those columns were left as they were.', 'warn');
+      }
+      if (!failed.length) {
+        if (!skippedCols.length) toast('Master data imported', 'ok');
+        return;
+      }
+      alert(failed.length + ' item(s) could not be saved and are NOT in the database:\n\n' +
+        failed.slice(0, 25).join('\n') +
+        (failed.length > 25 ? '\n\n...and ' + (failed.length - 25) + ' more' : '') +
+        '\n\nEverything else was imported. Fix these and import again.');
+      toast(failed.length + ' item(s) failed to import', 'bad');
+    }, err);
 }
 
 /* ------------------------------------------------------ finalise a run */
@@ -2954,6 +3092,18 @@ function finaliseRun() {
       'That is a credit note rather than an invoice, and Xero will not read a ' +
       'negative invoice as one. Raise those in Xero by hand and take the rows out ' +
       'of this month first.');
+    return;
+  }
+
+  /* Asked BEFORE the numbers are reserved. calc.js refuses to build a line with
+     no account code, and the build happens after three blocks of document
+     numbers have already been taken from the shared counter - so an unset
+     setting used to burn a block of numbers on its way to failing. */
+  try {
+    CB.requireAccounts(ST.cfg, ['acctPassThrough', 'acctMgmtIncome', 'acctServiceIncome']);
+  } catch (e) {
+    alert(e.message);
+    go('cfg');
     return;
   }
 
@@ -3246,14 +3396,43 @@ function showRun(id) {
 
 /* Voiding keeps the run and its numbers on record. The numbers stay burnt on
  * purpose: they may already be sitting in Xero. */
+/* Voiding here does not reach into Xero.
+ *
+ * A run that has been posted has real invoices in the organisation, and this
+ * only changes a status in our own database. Void it, bill the period again,
+ * and Xero holds two sets of invoices for one month while this side records
+ * one - which is the kind of thing found months later by someone reconciling a
+ * control account. So the invoices that are already there are counted and named
+ * before anything is voided, and the operator has to say they will deal with
+ * them. */
 function voidRun(id) {
   if (!requireWrite()) return;
-  var note = prompt('Why is this run being voided? (kept on the record)');
-  if (note === null) return;
-  DB.voidRun(id, note)
-    .then(function () { return DB.audit('run_voided', { run: id, note: note }); })
-    .then(loadRuns)
-    .then(function () { toast('Run voided. Its document numbers stay reserved.', 'ok'); }, err);
+  var NL = String.fromCharCode(10);
+
+  DB.getRun(id).then(function (d) {
+    var posted = (d.documents || []).filter(function (x) { return x.xero_invoice_id; });
+    if (posted.length) {
+      var names = posted.slice(0, 6).map(function (x) { return '  ' + x.number; }).join(NL);
+      if (!confirm(posted.length + ' of this run’s documents are already in Xero:' + NL + NL +
+        names + (posted.length > 6 ? NL + '  and ' + (posted.length - 6) + ' more' : '') + NL + NL +
+        'Voiding here does NOT touch Xero. Those invoices stay in the organisation, ' +
+        'and billing this period again will put a second set beside them.' + NL + NL +
+        'Void them in Xero yourself first. Continue?')) return;
+    }
+
+    var note = prompt('Why is this run being voided? (kept on the record)');
+    if (note === null) return;
+    return DB.voidRun(id, note)
+      .then(function () {
+        return DB.audit('run_voided', { run: id, note: note, alreadyInXero: posted.length });
+      })
+      .then(loadRuns)
+      .then(function () {
+        toast('Run voided. Its document numbers stay reserved' +
+          (posted.length ? ' — and ' + posted.length + ' invoice(s) are still in Xero' : '') + '.',
+          posted.length ? 'warn' : 'ok');
+      });
+  }).catch(err);
 }
 
 /* --------------------------------------------------------------- access */
