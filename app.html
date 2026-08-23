@@ -130,6 +130,11 @@
 
 <!-- ============================================================ MASTER -->
 <section class="panel" id="p-stock">
+  <div class="row" style="gap:8px;margin-bottom:12px">
+    <button class="btn sm" id="stockViewOn" onclick="stockView('on')">Stock on hand</button>
+    <button class="btn sm ghost" id="stockViewBun" onclick="stockView('bundles')">Bundles</button>
+  </div>
+  <input type="file" id="fileBundles" accept=".csv,.xlsx,.xls" hidden>
   <div id="stockHead"></div>
   <div id="stockBody"></div>
 </section>
@@ -282,7 +287,7 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=e2b5b4a756"></script>
+<script src="assets/db.js?v=8990d6be89"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
 <script src="assets/calc.js?v=c996f764d7"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
@@ -305,7 +310,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '855185516efd';
+  var MINE = '3f42aa4abce2';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -467,7 +472,7 @@ function go(p) {
   }
   if (p === 'dash') renderDash();
   if (p === 'review') renderReview();
-  if (p === 'stock') renderStock();
+  if (p === 'stock') stockView(STOCK.view || 'on');
   if (p === 'settle') renderSettle();
   if (p === 'out') renderOut();
   if (p === 'master') { renderXeroContacts(); renderProjects(); renderProducts(); renderPharmacies(); }
@@ -1910,6 +1915,288 @@ function recompute(raw) {
 }
 
 /* ============================================================= REVIEW */
+/* --------------------------------------------------------------- bundles */
+
+/* What a bundle is made of.
+ *
+ * Stock moves the single SKUs inside a package. Where a pharmacy's sheet fills
+ * in its product columns, that is used - it is what actually went out. This is
+ * what answers for every sale where the sheet says nothing: a flat sold-out list
+ * naming only the package, or a package sheet from a pharmacy that never fills
+ * the columns in. Without a recipe those sales cannot move stock at all.
+ */
+var BUNDLE = { rows: [], owner: '', editing: null };
+
+function renderBundles() {
+  var host = $('#stockBody');
+  host.innerHTML = '<div class="card"><div class="hint">Loading bundles&hellip;</div></div>';
+  DB.bundles.list(BUNDLE.owner || null).then(function (rows) {
+    BUNDLE.rows = rows || [];
+    drawBundles();
+  }, function (e) {
+    err(e);
+    host.innerHTML = '<div class="card"><div class="note warn">Could not read bundles: ' +
+      esc(e.message || String(e)) + '</div></div>';
+  });
+}
+
+/* rows come back one per component; a bundle with none comes back once with a
+   null component, which is a bundle somebody started and never filled in */
+function bundleGroups() {
+  var by = {}, order = [];
+  BUNDLE.rows.forEach(function (r) {
+    if (!by[r.bundle_id]) {
+      by[r.bundle_id] = {
+        id: r.bundle_id, sku: r.bundle_sku, name: r.bundle_name,
+        owner: r.brand_owner_code, ownerId: r.brand_owner_id, parts: []
+      };
+      order.push(r.bundle_id);
+    }
+    if (r.component_id) {
+      by[r.bundle_id].parts.push({
+        id: r.component_id, sku: r.component_sku, name: r.component_name, qty: +r.qty
+      });
+    }
+  });
+  return order.map(function (k) { return by[k]; });
+}
+
+function drawBundles() {
+  var groups = bundleGroups();
+  var empty = groups.filter(function (g) { return !g.parts.length; });
+
+  var boOpts = ST.master.projects.map(function (b) {
+    return '<option value="' + esc(b.id) + '"' + (BUNDLE.owner === b.id ? ' selected' : '') +
+      '>' + esc(b.name) + '</option>';
+  }).join('');
+
+  var h = '<div class="card"><h2>Bundles</h2>' +
+    '<div class="hint">What each package contains. Used to move stock whenever a sheet does not ' +
+    'state the contents itself &mdash; where it does, the sheet wins, because that is what actually ' +
+    'left the shelf.</div>' +
+    '<div class="row" style="margin-top:11px;gap:8px;flex-wrap:wrap">' +
+      '<select onchange="BUNDLE.owner=this.value;renderBundles()">' +
+        '<option value="">All brand owners</option>' + boOpts + '</select>' +
+      '<button class="btn sm" onclick="newBundle()">New bundle</button>' +
+      '<button class="btn sm ghost" onclick="$(&#39;#fileBundles&#39;).click()">Import</button>' +
+      '<button class="btn sm ghost" onclick="exportBundles()">Export</button>' +
+      '<button class="btn sm ghost" onclick="bundleTemplate()">Blank template</button>' +
+    '</div></div>';
+
+  if (empty.length) {
+    h += '<div class="note warn"><b>' + empty.length + ' bundle(s) have nothing in them.</b> ' +
+      'A sale of one of these moves no stock at all, which looks the same on the shelf as a sale ' +
+      'that never happened: ' +
+      empty.map(function (g) { return esc(g.name); }).join(', ') + '</div>';
+  }
+
+  if (!groups.length) {
+    h += '<div class="card"><div class="hint">No bundles yet. Create one, or import a file with ' +
+      'a row per component &mdash; the import creates any product it has not seen before.</div></div>';
+    $('#stockBody').innerHTML = h;
+    return;
+  }
+
+  h += '<div class="card"><div class="scroll" style="max-height:560px"><table>' +
+    '<tr><th>Brand</th><th>Bundle</th><th>SKU</th><th>Contains</th>' +
+    '<th class="num">Items</th><th></th></tr>' +
+    groups.map(function (g) {
+      return '<tr><td>' + esc(g.owner) + '</td>' +
+        '<td><b>' + esc(g.name) + '</b></td>' +
+        '<td>' + esc(g.sku || '') + '</td>' +
+        '<td>' + (g.parts.length
+          ? g.parts.map(function (p) {
+              return esc(p.name) + ' &times;' + CB.r2(p.qty);
+            }).join('<br>')
+          : '<span class="mut">nothing</span>') + '</td>' +
+        '<td class="num">' + g.parts.reduce(function (t, p) { return t + p.qty; }, 0) + '</td>' +
+        '<td><button class="btn sm ghost" onclick="editBundle(\'' + esc(g.id) + '\')">Edit</button></td>' +
+        '</tr>';
+    }).join('') + '</table></div></div>';
+
+  $('#stockBody').innerHTML = h;
+}
+
+/* A new bundle is a product that does not exist yet, so it is created first and
+   then filled in - the same two steps the operator would take by hand. */
+function newBundle() {
+  if (!requireWrite()) return;
+  var owner = BUNDLE.owner || (ST.master.projects[0] || {}).id;
+  if (!owner) { toast('Add a brand owner first', 'warn'); return; }
+  var name = prompt('Name of the new bundle, exactly as it appears on the pharmacy sheets:');
+  if (!name || !name.trim()) return;
+  var sku = prompt('SKU for it (optional):') || '';
+
+  DB.saveProduct({ name: name.trim(), sku: sku.trim(), brandOwnerId: owner, isBundle: true })
+    .then(function (p) {
+      return refreshMaster().then(function () {
+        BUNDLE.owner = owner;
+        return DB.bundles.list(owner).then(function (rows) {
+          BUNDLE.rows = rows || [];
+          editBundle(p.id);
+        });
+      });
+    }, err);
+}
+
+function editBundle(id) {
+  if (!requireWrite()) return;
+  var g = bundleGroups().filter(function (x) { return x.id === id; })[0];
+  if (!g) { toast('That bundle is no longer here', 'warn'); return; }
+
+  /* Only single SKUs can go inside, and only from the same brand owner - a
+     package belongs to one brand, and offering another brand's products is
+     offering a mistake. */
+  var choices = ST.master.products.filter(function (p) {
+    return !p.isBundle && p.id !== id &&
+      (p.brandOwnerId === g.ownerId || p.project === g.owner);
+  });
+  if (!choices.length) {
+    toast('No single SKUs for this brand yet — import them, or add them on Contacts', 'warn');
+    return;
+  }
+  var have = {};
+  g.parts.forEach(function (p) { have[p.id] = p.qty; });
+
+  $('#stockBody').innerHTML =
+    '<div class="card"><h2>' + esc(g.name) + '</h2>' +
+    '<div class="hint">How many of each single SKU one of these contains. Saving replaces the ' +
+    'whole recipe, so enter everything it holds &mdash; a component left blank is one removed.</div>' +
+    '<div class="scroll" style="max-height:440px;margin-top:11px"><table>' +
+    '<tr><th>Single SKU</th><th class="num" style="width:130px">Per bundle</th></tr>' +
+    choices.map(function (p) {
+      return '<tr><td>' + esc(p.name) + (p.sku ? ' <span class="mut">' + esc(p.sku) + '</span>' : '') +
+        '</td><td class="num"><input type="number" step="0.001" min="0" ' +
+        'style="width:110px;text-align:right" data-comp="' + esc(p.id) + '" value="' +
+        (have[p.id] || '') + '"></td></tr>';
+    }).join('') + '</table></div>' +
+    '<div class="row" style="margin-top:11px;gap:8px">' +
+      '<button class="btn" onclick="saveBundle(\'' + esc(id) + '\')">Save recipe</button>' +
+      '<button class="btn ghost" onclick="renderBundles()">Cancel</button>' +
+    '</div></div>';
+}
+
+function saveBundle(id) {
+  if (!requireWrite()) return;
+  var rows = [];
+  Array.prototype.forEach.call($('#stockBody').querySelectorAll('input[data-comp]'), function (i) {
+    var q = CB.num(i.value);
+    if (q > 0) rows.push({ component_id: i.getAttribute('data-comp'), qty: q });
+  });
+  DB.bundles.setComponents(id, rows).then(function (n) {
+    toast(n ? n + ' component(s) saved' : 'Recipe cleared — this is no longer a bundle', 'ok');
+    return DB.audit('bundle_saved', { bundle: id, components: rows.length });
+  }).then(refreshMaster).then(renderBundles, err);
+}
+
+/* ---- import / export -----------------------------------------------------
+ *
+ * One row per component, which is the shape a bill of materials always takes
+ * and the only one that round-trips: export, edit in Excel, import back.
+ */
+var BUNDLE_COLS = ['Bundle SKU', 'Bundle', 'Component SKU', 'Component', 'Qty per bundle'];
+
+function exportBundles() {
+  var groups = bundleGroups();
+  var rows = [];
+  groups.forEach(function (g) {
+    if (!g.parts.length) {
+      rows.push({ 'Bundle SKU': g.sku || '', 'Bundle': g.name,
+                  'Component SKU': '', 'Component': '', 'Qty per bundle': '' });
+      return;
+    }
+    g.parts.forEach(function (p) {
+      rows.push({
+        'Bundle SKU': g.sku || '', 'Bundle': g.name,
+        'Component SKU': p.sku || '', 'Component': p.name, 'Qty per bundle': CB.r2(p.qty)
+      });
+    });
+  });
+  if (!rows.length) { toast('No bundles to export yet', 'warn'); return; }
+  dl('CTG4U_Bundles.csv',
+    new Blob([CB.toCSV({ columns: BUNDLE_COLS, rows: rows })], { type: 'text/csv;charset=utf-8' }));
+}
+
+function bundleTemplate() {
+  dl('CTG4U_Bundles_template.csv', new Blob([CB.toCSV({
+    columns: BUNDLE_COLS,
+    rows: [
+      { 'Bundle SKU': 'ZB2', 'Bundle': 'Zeero-Basic-B-2', 'Component SKU': 'AC30',
+        'Component': 'Ance Cream', 'Qty per bundle': 1 },
+      { 'Bundle SKU': 'ZB2', 'Bundle': 'Zeero-Basic-B-2', 'Component SKU': 'GC30',
+        'Component': 'Gel Cleanser', 'Qty per bundle': 1 },
+      { 'Bundle SKU': 'ZA1', 'Bundle': 'Zeero-Basic-A-1', 'Component SKU': 'AC30',
+        'Component': 'Ance Cream', 'Qty per bundle': 1 }
+    ]
+  })], { type: 'text/csv;charset=utf-8' }));
+  toast('One row per component. The same file exports and imports.', 'ok');
+}
+
+$('#fileBundles').onchange = function (e) {
+  var f = e.target.files[0]; if (!f || !requireWrite()) return;
+  var owner = BUNDLE.owner;
+  if (!owner) {
+    toast('Choose a brand owner first — a bundle belongs to one brand, and the import ' +
+          'creates any product it has not seen', 'warn');
+    e.target.value = ''; return;
+  }
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var wb = XLSX.read(new Uint8Array(r.result), { type: 'array' });
+      var sheet = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      var pick = function (row, names) {
+        var k = Object.keys(row).filter(function (c) {
+          return names.indexOf(CB.normKey(c)) >= 0;
+        })[0];
+        return k ? String(row[k]).trim() : '';
+      };
+      var rows = sheet.map(function (x) {
+        return {
+          bundle: pick(x, ['BUNDLE', 'BUNDLE NAME', 'PACKAGE']),
+          bundle_sku: pick(x, ['BUNDLE SKU', 'PACKAGE SKU']),
+          component: pick(x, ['COMPONENT', 'COMPONENT NAME', 'SINGLE SKU', 'PRODUCT']),
+          component_sku: pick(x, ['COMPONENT SKU', 'SINGLE SKU CODE']),
+          qty: CB.num(pick(x, ['QTY PER BUNDLE', 'QTY', 'QUANTITY'])) || 1
+        };
+      }).filter(function (x) { return x.bundle && x.component; });
+
+      if (!rows.length) {
+        toast('No rows with both a bundle and a component — check the column headings ' +
+              'against the template', 'bad');
+        return;
+      }
+      /* Replacing recipes wholesale is not something to do by accident. */
+      if (!confirm('Import ' + rows.length + ' component row(s)?\n\n' +
+            'Every bundle named in this file has its recipe REPLACED by what the file says. ' +
+            'Bundles not mentioned are left alone.')) return;
+
+      DB.bundles.import(owner, rows).then(function (res) {
+        var made = (res.created || []);
+        toast(res.rows + ' row(s) across ' + (res.bundles || 0) + ' bundle(s) imported', 'ok');
+        if (made.length) {
+          alert('Created ' + made.length + ' new record(s) that were not in the master yet:\n\n' +
+            made.slice(0, 30).join('\n') +
+            (made.length > 30 ? '\n\n...and ' + (made.length - 30) + ' more' : '') +
+            '\n\nIf any of these are a spelling of something that already exists, ' +
+            'fix it on the Contacts tab — otherwise you now have two of it.');
+        }
+        return DB.audit('bundles_imported', { rows: res.rows, created: made.length });
+      }).then(refreshMaster).then(renderBundles, err);
+    } catch (e2) { toast('Could not read that file: ' + e2.message, 'bad'); }
+  };
+  r.readAsArrayBuffer(f);
+  e.target.value = '';
+};
+
+function stockView(v) {
+  STOCK.view = v;
+  $('#stockViewOn').className  = 'btn sm' + (v === 'on' ? '' : ' ghost');
+  $('#stockViewBun').className = 'btn sm' + (v === 'bundles' ? '' : ' ghost');
+  if (v === 'bundles') { $('#stockHead').innerHTML = ''; renderBundles(); }
+  else renderStock();
+}
+
 /* ------------------------------------------------------------------ stock */
 
 /* What is sitting in each pharmacy, and how it got there.
@@ -1918,7 +2205,7 @@ function recompute(raw) {
  * this screen is a stored figure that could disagree with its own history. Every
  * column below is derived from the same rows.
  */
-var STOCK = { rows: [], pharmacy: '', owner: '', showZero: false };
+var STOCK = { rows: [], pharmacy: '', owner: '', showZero: false, view: 'on' };
 
 function renderStock() {
   var head = $('#stockHead'), body = $('#stockBody');
@@ -2042,7 +2329,7 @@ function openingStock() {
   }
   var ph = ST.master.pharmacies.filter(function (p) { return p.id === STOCK.pharmacy; })[0];
   var prods = ST.master.products.filter(function (p) {
-    return !STOCK.owner || p.brand_owner_id === STOCK.owner || p.project === STOCK.owner;
+    return !STOCK.owner || p.brandOwnerId === STOCK.owner || p.project === STOCK.owner;
   });
   if (!prods.length) {
     toast('No products to count yet — add them on the Contacts tab first', 'warn');

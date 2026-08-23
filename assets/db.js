@@ -244,6 +244,10 @@
               id: p.id, sku: p.sku || '', name: p.name,
               project: p.brand_owners ? p.brand_owners.code : '',
               brandOwnerId: p.brand_owner_id,
+              /* Without this every product reads as a single SKU, so bundles
+                 would be offered as things to put INSIDE a bundle - refused by
+                 the database, but only after the operator picked one. */
+              isBundle: !!p.is_bundle,
               aliases: p.aliases || [], active: p.active
             };
           })
@@ -341,7 +345,7 @@
     saveProduct: function (p) {
       var row = pick(p, {
         sku: ['sku', 'blank'], name: 'name', brandOwnerId: 'brand_owner_id',
-        aliases: 'aliases'
+        aliases: 'aliases', isBundle: 'is_bundle'
       });
       if (Object.prototype.hasOwnProperty.call(p, 'active')) row.active = p.active !== false;
       row.updated_at = new Date().toISOString();
@@ -510,6 +514,30 @@
           .eq('pharmacy_id', pharmacyId).eq('product_id', productId)
           .order('moved_on', { ascending: false }).limit(200)
           .then(function (r) { return rows(r, 'Read stock history'); });
+      }
+    },
+
+    /* ----------------------------------------------------------- bundles */
+
+    /* What a package contains. Used to move stock wherever a sheet does not
+     * state its own contents - where it does, the sheet wins. */
+    bundles: {
+      list: function (brandOwnerId) {
+        return sb.rpc('bundle_list', { p_brand_owner: brandOwnerId || null })
+          .then(function (r) { fail('Read bundles', r.error); return r.data || []; });
+      },
+      /* Replaces the whole recipe: a component left out is one removed, which
+         is what the screen says it is doing. */
+      setComponents: function (bundleId, rows) {
+        return sb.rpc('bundle_set_components', { p_bundle: bundleId, p_rows: rows || [] })
+          .then(function (r) { fail('Save bundle', r.error); return r.data; });
+      },
+      /* Creates whatever the file names and does not exist yet, and reports it
+         rather than doing it quietly - a typo becoming a new product is how one
+         master list turns into two of everything. */
+      import: function (brandOwnerId, rows) {
+        return sb.rpc('bundle_import', { p_brand_owner: brandOwnerId, p_rows: rows || [] })
+          .then(function (r) { fail('Import bundles', r.error); return r.data || {}; });
       }
     },
 
