@@ -34,6 +34,7 @@
       <button data-p="settle">Settlement</button>
       <button data-p="out">Outputs</button>
       <button data-p="runs">History</button>
+      <button data-p="stock">Stock</button>
       <button data-p="master">Contacts</button>
       <button data-p="cfg">Settings</button>
       <button data-p="users" id="navUsers" style="display:none">Access</button>
@@ -128,6 +129,11 @@
 </section>
 
 <!-- ============================================================ MASTER -->
+<section class="panel" id="p-stock">
+  <div id="stockHead"></div>
+  <div id="stockBody"></div>
+</section>
+
 <section class="panel" id="p-master">
   <div class="card">
     <h2>Xero contacts</h2>
@@ -276,9 +282,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=c0437fc998"></script>
+<script src="assets/db.js?v=e2b5b4a756"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=e9b0016201"></script>
+<script src="assets/calc.js?v=c996f764d7"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -299,7 +305,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '6e4e42ee2c13';
+  var MINE = '855185516efd';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -437,6 +443,8 @@ var PAGE = {
   out:    ['Outputs', 'Finalise the month, then send it to Xero or take the files', ''],
   runs:   ['History', 'Every month that has been finalised, and what it produced',
            '<button class="btn ghost" onclick="loadRuns()">Refresh</button>'],
+  stock:  ['Stock', 'What is sitting in each pharmacy, and how it got there',
+           '<button class="btn ghost" onclick="renderStock()">Refresh</button>'],
   master: ['Contacts', 'Pharmacies, brand owners and the packages that map to them', ''],
   cfg:    ['Settings', 'Rates, account codes, tracking and the Xero connection', ''],
   users:  ['Access', 'Who can see this, and what they may do', '']
@@ -459,6 +467,7 @@ function go(p) {
   }
   if (p === 'dash') renderDash();
   if (p === 'review') renderReview();
+  if (p === 'stock') renderStock();
   if (p === 'settle') renderSettle();
   if (p === 'out') renderOut();
   if (p === 'master') { renderXeroContacts(); renderProjects(); renderProducts(); renderPharmacies(); }
@@ -1594,8 +1603,13 @@ function renderPackages() {
 
   var rowsOut = ST.packages.map(function (P) {
     var x = CB.packageCrossCheck(P.parsed, ST.cfg);
+    /* The same sheet answers a second question: what left the shelf. The
+       product columns between the price and the total are the bundle contents,
+       and the Stock Out block below the totals is the pharmacy's own count of
+       them - so the reading can be checked the same way the money is. */
+    var sk = CB.stockCrossCheck(P.parsed);
     var zero = !P.parsed.lines.length || !x.gross;
-    return { P: P, x: x, zero: zero };
+    return { P: P, x: x, sk: sk, zero: zero };
   });
 
   var billable = rowsOut.filter(function (r) { return !r.zero && r.P.use; });
@@ -1603,6 +1617,16 @@ function renderPackages() {
   var unmatched = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy; });
   var broken = rowsOut.filter(function (r) { return !r.zero && !r.x.ok; });
   var noted = rowsOut.filter(function (r) { return !r.zero && r.x.notes.length; });
+  /* Only worth raising where the sheet actually carries a Stock Out block to
+     check against - a sheet without one is a gap in the sheet, not a
+     disagreement, and reporting it as a mismatch would cry wolf on every
+     pharmacy that never fills it in. */
+  var stockOff = rowsOut.filter(function (r) {
+    return !r.zero && (r.P.parsed.statedStockOut || []).length && !r.sk.ok;
+  });
+  var noStockBlock = rowsOut.filter(function (r) {
+    return !r.zero && !(r.P.parsed.statedStockOut || []).length;
+  });
   var giveaways = rowsOut.reduce(function (t, r) { return t + r.P.parsed.giveaways.length; }, 0);
 
   var gross = CB.sumMoney(billable, function (r) { return r.x.gross; });
@@ -1646,6 +1670,27 @@ function renderPackages() {
       broken.map(function (r) {
         return '<tr><td>' + esc(r.P.name) + '</td><td>' + r.x.problems.map(esc).join('<br>') + '</td></tr>';
       }).join('') + '</table></div></div>';
+  }
+
+  /* Stock is reported separately from money on purpose. A sheet whose product
+     columns disagree with its own Stock Out block is still billable - the
+     package names and prices can be perfectly right while the contents were
+     mistyped - so this warns without holding the money back. Conflating the two
+     would either block a correct invoice or hide a wrong shelf. */
+  if (stockOff.length) {
+    h += '<div class="note warn"><b>' + stockOff.length + ' sheet(s) disagree with their own Stock Out count.</b> ' +
+      'The money is unaffected and these still bill normally &mdash; but the product columns are what ' +
+      'moves stock, so the shelf would be wrong. Check the columns between the price and the totals.' +
+      '<div class="scroll" style="max-height:200px;margin-top:9px"><table><tr><th>Sheet</th><th>Problem</th></tr>' +
+      stockOff.map(function (r) {
+        return '<tr><td>' + esc(r.P.name) + '</td><td>' + r.sk.problems.map(esc).join('<br>') + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  if (noStockBlock.length) {
+    h += '<div class="note"><b>' + noStockBlock.length + ' sheet(s) carry no Stock Out summary.</b> ' +
+      'Their stock still moves &mdash; it is read from the product columns &mdash; but there is nothing ' +
+      'on the sheet to check that reading against.</div>';
   }
 
   if (unmatched.length) {
@@ -1724,12 +1769,33 @@ function buildFromPackages() {
         pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
         productRaw: l.pkg,
         qty: l.qty, unitPrice: l.price, amount: null,
+        /* what was inside the packages on this line, so the stock ledger can
+           move the single SKUs the bundle is made of */
+        parts: l.parts,
         /* the package name decides the brand owner; `owner` only catches what is
          * not mapped yet, and strictProduct keeps a near miss from deciding it */
         projectCode: owner,
         strictProduct: true
       });
     });
+
+    /* Given away: never invoiced, but the goods left the shelf.
+     *
+     * These ride in as ordinary lines at zero price, which is exactly what they
+     * are. isBillable() requires a gross, so they cannot reach an invoice, a
+     * settlement, or the orphan gate - and they cannot be forgotten by the
+     * ledger either, which is what happened when they existed only as a note in
+     * the skipped list. */
+    CB.packageGiveawayLines(P.parsed).forEach(function (g) {
+      raw.push({
+        _sheet: P.name, _row: 0,
+        pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
+        productRaw: g.pkg,
+        qty: g.qty, unitPrice: 0, amount: 0,
+        parts: g.parts, projectCode: owner, strictProduct: true
+      });
+    });
+
     P.parsed.giveaways.forEach(function (g) {
       skipped.push({ _sheet: P.name, _row: g.row, reason: 'giveaway' + (g.note ? ' — ' + g.note : ''), amount: 0 });
     });
@@ -1844,6 +1910,203 @@ function recompute(raw) {
 }
 
 /* ============================================================= REVIEW */
+/* ------------------------------------------------------------------ stock */
+
+/* What is sitting in each pharmacy, and how it got there.
+ *
+ * The ledger is a list of movements and the balance is their sum, so nothing on
+ * this screen is a stored figure that could disagree with its own history. Every
+ * column below is derived from the same rows.
+ */
+var STOCK = { rows: [], pharmacy: '', owner: '', showZero: false };
+
+function renderStock() {
+  var head = $('#stockHead'), body = $('#stockBody');
+  head.innerHTML = '<div class="card"><div class="hint">Loading stock&hellip;</div></div>';
+  body.innerHTML = '';
+
+  DB.stock.balances(STOCK.pharmacy || null, STOCK.owner || null).then(function (rows) {
+    STOCK.rows = rows || [];
+    drawStock();
+  }, function (e) {
+    err(e);
+    head.innerHTML = '<div class="card"><div class="note warn">Could not read stock: ' +
+      esc(e.message || String(e)) + '</div></div>';
+  });
+}
+
+function drawStock() {
+  var head = $('#stockHead'), body = $('#stockBody');
+  var all = STOCK.rows;
+  var rows = STOCK.showZero ? all : all.filter(function (r) { return +r.on_hand !== 0; });
+
+  var onHand = all.reduce(function (t, r) { return t + (+r.on_hand); }, 0);
+  var soldT = all.reduce(function (t, r) { return t + (+r.sold); }, 0);
+  var givenT = all.reduce(function (t, r) { return t + (+r.given); }, 0);
+  var shops = Object.keys(all.reduce(function (m, r) { m[r.pharmacy_code] = 1; return m; }, {})).length;
+  var negative = all.filter(function (r) { return +r.on_hand < 0; });
+
+  var phOpts = ST.master.pharmacies.map(function (p) {
+    return '<option value="' + esc(p.id) + '"' + (STOCK.pharmacy === p.id ? ' selected' : '') +
+      '>' + esc(p.trading) + '</option>';
+  }).join('');
+  var boOpts = ST.master.projects.map(function (b) {
+    return '<option value="' + esc(b.id) + '"' + (STOCK.owner === b.id ? ' selected' : '') +
+      '>' + esc(b.name) + '</option>';
+  }).join('');
+
+  head.innerHTML =
+    '<div class="card"><h2>Stock on hand</h2>' +
+    '<div class="hint">Counted at the single SKU, never at the bundle &mdash; the package is what a ' +
+    'customer buys, the product inside it is what sits on the shelf. Selling one bundle moves every ' +
+    'product it contained.</div>' +
+    '<div class="row" style="margin-top:11px;gap:8px;flex-wrap:wrap">' +
+      '<select onchange="STOCK.pharmacy=this.value;renderStock()">' +
+        '<option value="">All pharmacies</option>' + phOpts + '</select>' +
+      '<select onchange="STOCK.owner=this.value;renderStock()">' +
+        '<option value="">All brand owners</option>' + boOpts + '</select>' +
+      '<label class="row" style="gap:6px;align-items:center"><input type="checkbox"' +
+        (STOCK.showZero ? ' checked' : '') +
+        ' onchange="STOCK.showZero=this.checked;drawStock()"> show lines at zero</label>' +
+      '<button class="btn sm ghost" onclick="dlStock()">Download CSV</button>' +
+      '<button class="btn sm" onclick="openingStock()">Enter opening stock</button>' +
+    '</div>' +
+    '<div class="kpis" style="margin-top:12px">' +
+      kpi('On hand', String(CB.r2(onHand))) +
+      kpi('Sold', String(CB.r2(soldT))) +
+      kpi('Given away', String(CB.r2(givenT)), givenT ? 'accent' : '') +
+      kpi('Pharmacies', String(shops)) +
+      kpi('Below zero', String(negative.length), negative.length ? 'accent' : '') +
+    '</div></div>';
+
+  if (!all.length) {
+    body.innerHTML = '<div class="card"><div class="hint">Nothing has moved yet. Enter opening stock ' +
+      'for a pharmacy, or finalise a month &mdash; sales post themselves.</div></div>';
+    return;
+  }
+
+  /* Below zero means more was sold than the ledger ever received. That is not a
+     stock problem to be netted off quietly: either an opening balance was never
+     entered, or a delivery was not recorded, and both are worth naming. */
+  var h = '';
+  if (negative.length) {
+    h += '<div class="note warn"><b>' + negative.length + ' line(s) are below zero.</b> ' +
+      'More has gone out than ever came in, so either an opening balance is missing or a delivery ' +
+      'was never recorded. The sales are not in doubt &mdash; the receipts are.' +
+      '<div class="scroll" style="max-height:170px;margin-top:9px"><table>' +
+      '<tr><th>Pharmacy</th><th>Product</th><th class="num">On hand</th></tr>' +
+      negative.map(function (r) {
+        return '<tr><td>' + esc(r.pharmacy_trading) + '</td><td>' + esc(r.product_name) +
+          '</td><td class="num">' + CB.r2(+r.on_hand) + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+
+  h += '<div class="card"><div class="scroll" style="max-height:560px"><table>' +
+    '<tr><th>Pharmacy</th><th>Brand</th><th>Product</th>' +
+    '<th class="num">Opening</th><th class="num">Delivered</th>' +
+    '<th class="num">Sold</th><th class="num">Given</th>' +
+    '<th class="num">Returned</th><th class="num">Adjusted</th>' +
+    '<th class="num">On hand</th><th>Last moved</th></tr>' +
+    rows.map(function (r) {
+      var oh = +r.on_hand;
+      return '<tr class="' + (oh < 0 ? 'bad' : '') + '">' +
+        '<td>' + esc(r.pharmacy_trading) + '</td>' +
+        '<td>' + esc(r.brand_owner_code) + '</td>' +
+        '<td>' + esc(r.product_name) + '</td>' +
+        '<td class="num">' + CB.r2(+r.opening) + '</td>' +
+        '<td class="num">' + CB.r2(+r.delivered) + '</td>' +
+        '<td class="num">' + CB.r2(+r.sold) + '</td>' +
+        '<td class="num">' + (+r.given ? CB.r2(+r.given) : '') + '</td>' +
+        '<td class="num">' + (+r.returned ? CB.r2(+r.returned) : '') + '</td>' +
+        '<td class="num">' + (+r.adjusted ? CB.r2(+r.adjusted) : '') + '</td>' +
+        '<td class="num"><b>' + CB.r2(oh) + '</b></td>' +
+        '<td>' + esc(r.last_moved || '') + '</td></tr>';
+    }).join('') + '</table></div>' +
+    '<div class="hint" style="margin-top:8px">' + rows.length + ' of ' + all.length +
+    ' line(s) shown. Opening + Delivered + Returned &plusmn; Adjusted &minus; Sold &minus; Given = On hand.</div>' +
+    '</div>';
+
+  body.innerHTML = h;
+}
+
+/* Opening stock, one pharmacy at a time.
+ *
+ * Saving replaces that pharmacy's whole opening set rather than merging, and the
+ * prompt says so: an opening balance is a figure somebody counted on a day, and
+ * a half-applied count is worse than none. */
+function openingStock() {
+  if (!requireWrite()) return;
+  if (!STOCK.pharmacy) {
+    toast('Choose a pharmacy first — opening stock is counted one shelf at a time', 'warn');
+    return;
+  }
+  var ph = ST.master.pharmacies.filter(function (p) { return p.id === STOCK.pharmacy; })[0];
+  var prods = ST.master.products.filter(function (p) {
+    return !STOCK.owner || p.brand_owner_id === STOCK.owner || p.project === STOCK.owner;
+  });
+  if (!prods.length) {
+    toast('No products to count yet — add them on the Contacts tab first', 'warn');
+    return;
+  }
+
+  var had = {};
+  STOCK.rows.filter(function (r) { return r.pharmacy_trading === ph.trading; })
+    .forEach(function (r) { had[r.product_name] = +r.opening; });
+
+  var h = '<div class="card"><h2>Opening stock &mdash; ' + esc(ph.trading) + '</h2>' +
+    '<div class="hint">What was on the shelf before this system started counting. Saving replaces ' +
+    'this pharmacy\'s whole opening set, so enter the full count, not just what changed.</div>' +
+    '<div class="row" style="margin-top:10px;gap:8px;align-items:center">' +
+      '<label>Counted on</label><input type="date" id="openOn" value="' +
+      esc(CB.monthStart(ST.cfg.period)) + '"></div>' +
+    '<div class="scroll" style="max-height:420px;margin-top:10px"><table>' +
+    '<tr><th>Product</th><th class="num" style="width:130px">Quantity</th></tr>' +
+    prods.map(function (p) {
+      return '<tr><td>' + esc(p.name) + '</td><td class="num">' +
+        '<input type="number" step="1" min="0" style="width:110px;text-align:right" ' +
+        'data-prod="' + esc(p.id) + '" value="' + (had[p.name] || '') + '"></td></tr>';
+    }).join('') + '</table></div>' +
+    '<div class="row" style="margin-top:11px;gap:8px">' +
+      '<button class="btn" onclick="saveOpening()">Save opening stock</button>' +
+      '<button class="btn ghost" onclick="renderStock()">Cancel</button>' +
+    '</div></div>';
+  $('#stockBody').innerHTML = h;
+}
+
+function saveOpening() {
+  if (!requireWrite()) return;
+  var rows = [];
+  Array.prototype.forEach.call($('#stockBody').querySelectorAll('input[data-prod]'), function (i) {
+    var q = CB.num(i.value);
+    if (q > 0) rows.push({ product_id: i.getAttribute('data-prod'), qty: q });
+  });
+  var on = ($('#openOn') || {}).value || null;
+
+  DB.stock.setOpening(STOCK.pharmacy, on, rows).then(function (n) {
+    toast(n + ' opening balance(s) saved — anything left blank now counts as zero', 'ok');
+    return DB.audit('stock_opening_set', { pharmacy: STOCK.pharmacy, rows: rows.length });
+  }).then(renderStock, err);
+}
+
+function dlStock() {
+  var t = {
+    columns: ['Pharmacy', 'Brand owner', 'Product', 'SKU', 'Opening', 'Delivered',
+              'Sold', 'Given', 'Returned', 'Adjusted', 'On hand', 'Last moved'],
+    rows: STOCK.rows.map(function (r) {
+      return {
+        'Pharmacy': r.pharmacy_trading, 'Brand owner': r.brand_owner_code,
+        'Product': r.product_name, 'SKU': r.product_sku || '',
+        'Opening': CB.r2(+r.opening), 'Delivered': CB.r2(+r.delivered),
+        'Sold': CB.r2(+r.sold), 'Given': CB.r2(+r.given),
+        'Returned': CB.r2(+r.returned), 'Adjusted': CB.r2(+r.adjusted),
+        'On hand': CB.r2(+r.on_hand), 'Last moved': r.last_moved || ''
+      };
+    })
+  };
+  dl('CTG4U_Stock_' + (ST.cfg.period || '') + '.csv',
+    new Blob([CB.toCSV(t)], { type: 'text/csv;charset=utf-8' }));
+}
+
 function renderReview() {
   var host = $('#reviewBody');
   if (!ST.lines.length) { host.innerHTML = '<div class="card"><div class="hint">Import a file first.</div></div>'; return; }
@@ -3192,7 +3455,7 @@ function finaliseRun() {
          the document numbers, and the flip to final - is a single statement in
          the database that either happens or does not. The row count goes with
          it, so a batch that failed on the way up cannot be finalised over. */
-      var runId, expected = ST.lines.length;
+      var runId, expected = ST.lines.length, stockMoved = null, stockErr = null;
       DB.createRun(period, ST.cfg, totals, ST.sheets.map(function (x) { return x.file; }))
         .then(function (run) { runId = run.id; ST.runId = runId; return DB.saveRunLines(runId, ST.lines); })
         .then(function () {

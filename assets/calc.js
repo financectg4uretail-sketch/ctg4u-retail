@@ -302,6 +302,11 @@
         _sheet: L._sheet || '', _row: L._row || 0,
         pharmacyRaw: L.pharmacyRaw || '', productRaw: L.productRaw || '',
         qty: num(L.qty), unitPrice: num(L.unitPrice), dateRaw: L.dateRaw || '',
+        /* What was inside this line, when it came from a bundle. Carried through
+           untouched: the money side has no use for it, but the stock ledger
+           cannot be rebuilt without it, and this is the only place the two views
+           of the same row still travel together. */
+        parts: (L.parts && L.parts.length) ? L.parts : null,
         issues: []
       };
 
@@ -1149,6 +1154,9 @@
     '.dt th{background:#f1f5f8;text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;',
     '  color:#5b6b7c;padding:7px 8px;border-bottom:1px solid #d9e1e8}',
     '.dt td{padding:5px 8px;border-bottom:1px solid #eee}',
+    '.sech{margin:16px 0 5px;font-size:10px;font-weight:700;letter-spacing:.7px;',
+    '  text-transform:uppercase;color:#5b6b7c}',
+    '.dt td.pc,.dt th.pc{color:#5b6b7c}',
     '.dt tr.tt td{border-top:1.5px solid #333;border-bottom:0;font-weight:700;background:#fafafa}',
     '.n{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;white-space:nowrap}',
     /* The deductions and the payout are one argument and may not be split by a
@@ -1193,16 +1201,82 @@
       .map(function (l) { return l.trim(); }).filter(Boolean);
   }
 
+  /* What each product sold, across every pharmacy carrying this brand.
+   *
+   * Keyed on product AND price, the same as an invoice line, because a product
+   * sold at two prices is two things to a brand owner - a price change mid
+   * month is exactly what they would want to see rather than have averaged
+   * away. Biggest seller first: the question this table answers is "what is
+   * working", and that is read from the top. */
+  function productRollup(P) {
+    var by = {}, order = [];
+    (P.byPharmacy || []).forEach(function (B) {
+      (B.items || []).forEach(function (I) {
+        var k = normKey(I.description) + '|' + r2(I.unitPrice).toFixed(2);
+        if (!by[k]) {
+          by[k] = { description: I.description, unitPrice: r2(I.unitPrice),
+                    qty: 0, gross: 0, net: 0, pharmacies: {} };
+          order.push(k);
+        }
+        by[k].qty += I.qty;
+        by[k].gross = r2(by[k].gross + I.gross);
+        by[k].net = r2(by[k].net + I.net);
+        by[k].pharmacies[B.pharmacy.code || B.pharmacy.trading] = 1;
+      });
+    });
+    return order.map(function (k) {
+      var r = by[k];
+      r.pharmacyCount = Object.keys(r.pharmacies).length;
+      delete r.pharmacies;
+      return r;
+    }).sort(function (a, b) { return b.gross - a.gross; });
+  }
+
+  /* Percentages that add up to 100.0.
+   *
+   * Rounding each share on its own gives columns that total 99.9 or 100.1, and
+   * on a document going to a supplier that reads as an error in the arithmetic
+   * rather than as rounding. The largest-remainder method hands the spare
+   * tenths to the entries that lost the most in rounding, so the column totals
+   * exactly what the reader expects while every figure stays the closest
+   * available to its true share. */
+  function shares(values) {
+    var total = sum(values);
+    if (!total) return values.map(function () { return 0; });
+    var exact = values.map(function (v) { return v / total * 1000; });
+    var down = exact.map(function (e) { return Math.floor(e); });
+    var short = 1000 - down.reduce(function (a, b) { return a + b; }, 0);
+    var order = exact.map(function (e, i) { return { i: i, rem: e - Math.floor(e) }; })
+      .sort(function (a, b) { return b.rem - a.rem; });
+    for (var n = 0; n < short && n < order.length; n++) down[order[n].i]++;
+    return down.map(function (d) { return d / 10; });
+  }
+
   function statementHTML(P, c) {
     c = cfg(c);
     var sr = function (l, v, cls) {
       return '<tr class="' + (cls || '') + '"><td>' + l + '</td><td class="n">' + v + '</td></tr>';
     };
-    var rows = P.byPharmacy.map(function (B) {
+    var pShare = shares(P.byPharmacy.map(function (B) { return B.gross; }));
+    var rows = P.byPharmacy.map(function (B, i) {
       return '<tr><td>' + esc(B.pharmacy.trading) + '</td><td class="n">' + money(B.gross) + '</td>' +
+        '<td class="n pc">' + pShare[i].toFixed(1) + '%</td>' +
         '<td class="n">' + money(B.discount) + '</td><td class="n">' + money(B.net) + '</td>' +
         '<td class="n">' + money(B.mgmtFee) + '</td></tr>';
     }).join('');
+
+    /* What sold, rather than who sold it. */
+    var prod = productRollup(P);
+    var prShare = shares(prod.map(function (r) { return r.gross; }));
+    var prodRows = prod.map(function (r, i) {
+      return '<tr><td>' + esc(r.description) + '</td>' +
+        '<td class="n">' + r.qty + '</td>' +
+        '<td class="n">' + money(r.unitPrice) + '</td>' +
+        '<td class="n">' + r.pharmacyCount + '</td>' +
+        '<td class="n">' + money(r.gross) + '</td>' +
+        '<td class="n pc">' + prShare[i].toFixed(1) + '%</td></tr>';
+    }).join('');
+    var prodQty = prod.reduce(function (t, r) { return t + r.qty; }, 0);
 
     /* A labelled pair, colons aligned down the block. */
     var kv = function (k, v) {
@@ -1252,12 +1326,26 @@
       '</div>' +
 
 
+      '<div class="sech">Where the sales came from</div>' +
       '<table class="dt"><thead><tr><th>Pharmacy</th><th class="n">Sales Amount</th>' +
+      '<th class="n">Share</th>' +
       '<th class="n">Discount ' + r2(c.discountPct) + '%</th><th class="n">Net Sales</th>' +
       '<th class="n">Mgmt Fee</th></tr></thead><tbody>' + rows +
       '<tr class="tt"><td>Total &mdash; ' + P.pharmacyCount + ' pharmacy(s)</td>' +
-      '<td class="n">' + money(P.salesAmount) + '</td><td class="n">' + money(P.discount) + '</td>' +
+      '<td class="n">' + money(P.salesAmount) + '</td><td class="n pc">100.0%</td>' +
+      '<td class="n">' + money(P.discount) + '</td>' +
       '<td class="n">' + money(P.netSales) + '</td><td class="n">' + money(P.mgmtFee) + '</td></tr></tbody></table>' +
+
+      (prod.length
+        ? '<div class="sech">What sold</div>' +
+          '<table class="dt"><thead><tr><th>Product</th><th class="n">Units</th>' +
+          '<th class="n">Unit Price</th><th class="n">Pharmacies</th>' +
+          '<th class="n">Sales Amount</th><th class="n">Share</th></tr></thead><tbody>' + prodRows +
+          '<tr class="tt"><td>Total &mdash; ' + prod.length + ' product(s)</td>' +
+          '<td class="n">' + prodQty + '</td><td class="n"></td><td class="n"></td>' +
+          '<td class="n">' + money(P.salesAmount) + '</td><td class="n pc">100.0%</td></tr>' +
+          '</tbody></table>'
+        : '') +
 
       '<table class="sm2">' +
       sr('Sales Amount', money(P.salesAmount)) +
@@ -1324,6 +1412,7 @@
   var PKG_COMMISSION_RE = /^\s*commission\s*$/i;
   var PKG_INSURANCE_RE  = /^\s*insuran(s|ce)\s*$/i;
   var PKG_BILLING_RE    = /^\s*billing\s*$/i;
+  var PKG_STOCKOUT_RE   = /^\s*stock\s*out\s*$/i;
 
   function findPackageHeader(rows) {
     for (var i = 0; i < Math.min(rows.length, 15); i++) {
@@ -1357,6 +1446,27 @@
       voucher: firstMatch(cells, /voucher\s*used/),
       net: firstMatch(cells, /after\s*deduct/)
     };
+
+    /* What is INSIDE each package.
+     *
+     * These sheets are a cross-tab: every column that is not one of the five
+     * above is a product, and the number in it is how many of that product the
+     * package on this row contained. That is the bundle composition, stated per
+     * sale by the pharmacy itself, and it was being read and thrown away - the
+     * parser kept the package and the price and dropped the columns in between.
+     *
+     * Identified by elimination rather than by position, because a sheet that
+     * adds a column or reorders them is still readable that way, and these
+     * arrive from sixty-two different pharmacies. */
+    var known = {};
+    ['date', 'pkg', 'price', 'voucher', 'net'].forEach(function (k) {
+      if (col[k] >= 0) known[col[k]] = 1;
+    });
+    var comps = [];
+    cells.forEach(function (name, i) {
+      if (known[i] || !name) return;
+      comps.push({ at: i, name: String(rows[h][i]).trim() });
+    });
 
     /* The pharmacy's own identity sits above the header: the trading name in the
      * first column, and beside it the registered name, which is what Xero knows
@@ -1408,10 +1518,28 @@
             var t = String(row[n] == null ? '' : row[n]).trim();
             if (t && isNaN(Number(t)) && !/^#/.test(t)) { note = t; break; }
           }
-          giveaways.push({ row: k + 1, pkg: label || '(no package)', note: note });
+          /* The components come too. Billing and stock disagree about this row
+             on purpose: nobody paid, so it is never invoiced - but the goods
+             left the shelf, so it absolutely moved stock. Dropping the parts
+             here would understate every count by however much was given away,
+             and the pharmacy's own Stock Out block counts what physically went,
+             so the cross-check would report a shortfall it could not explain. */
+          var gparts = [];
+          comps.forEach(function (cp) {
+            var gq = num(row[cp.at]);
+            if (gq) gparts.push({ sku: cp.name, qty: gq });
+          });
+          giveaways.push({ row: k + 1, pkg: label || '(no package)', note: note, parts: gparts });
         }
         continue;
       }
+
+      /* what this one package contained */
+      var parts = [];
+      comps.forEach(function (cp) {
+        var q = num(row[cp.at]);
+        if (q) parts.push({ sku: cp.name, qty: q });
+      });
 
       lines.push({
         _row: k + 1,
@@ -1419,28 +1547,159 @@
         pkg: label || '(unnamed package)',
         price: r2(price),
         net: col.net >= 0 ? r2(num(row[col.net])) : null,
-        voucher: col.voucher >= 0 ? num(row[col.voucher]) : 0
+        voucher: col.voucher >= 0 ? num(row[col.voucher]) : 0,
+        parts: parts
       });
+    }
+
+    /* The sheet's own Stock Out block, below the totals.
+     *
+     * The pharmacy counts the products out of its own rows and writes the
+     * result here. The parser had to know about this block anyway - reading
+     * past the totals once turned this summary into sales and inflated a month
+     * - but it only knew to stop. Captured now, it is the same kind of
+     * independent second opinion the money already has: what we add up from the
+     * rows can be held against what the pharmacy added up from the same rows,
+     * and a disagreement means the columns were read wrongly. */
+    var statedStock = [];
+    for (var s = h + 1; s < rows.length; s++) {
+      if (!PKG_STOCKOUT_RE.test(String((rows[s] || [])[col.pkg] == null ? '' : (rows[s] || [])[col.pkg]).trim())) continue;
+      for (var t = s + 1; t < rows.length; t++) {
+        var nm = String((rows[t] || [])[col.pkg] == null ? '' : (rows[t] || [])[col.pkg]).trim();
+        var qt = num((rows[t] || [])[col.price]);
+        if (!nm) continue;
+        if (/^products?$/i.test(nm)) continue;          // the block's own header
+        if (qt) statedStock.push({ sku: nm, qty: qt });
+      }
+      break;
     }
 
     return {
       headerRow: h, columns: col,
       pharmacyTrading: trading, pharmacyContact: contact,
-      lines: lines, giveaways: giveaways, stated: stated
+      componentColumns: comps.map(function (cp) { return cp.name; }),
+      lines: lines, giveaways: giveaways, stated: stated,
+      statedStockOut: statedStock
     };
+  }
+
+  /* Every single SKU that left the shelf, worked out from what each package
+   * contained. The unit of sale is the package; the unit of STOCK is the
+   * product inside it, and those are different questions about the same row. */
+  function componentMovement(parsed) {
+    var by = {}, order = [];
+    var take = function (row, field) {
+      (row.parts || []).forEach(function (p) {
+        var k = normKey(p.sku);
+        if (!by[k]) { by[k] = { sku: p.sku, qty: 0, sold: 0, given: 0, packages: {} }; order.push(k); }
+        by[k][field] += p.qty;
+        by[k].qty += p.qty;
+        by[k].packages[row.pkg] = (by[k].packages[row.pkg] || 0) + p.qty;
+      });
+    };
+    /* sold and given away are both stock out, and the report has to be able to
+       tell them apart - one earns money and the other is a cost */
+    (parsed.lines || []).forEach(function (l) { take(l, 'sold'); });
+    (parsed.giveaways || []).forEach(function (g) { take(g, 'given'); });
+
+    return order.map(function (k) {
+      var r = by[k];
+      r.inPackages = Object.keys(r.packages).length;
+      return r;
+    }).sort(function (a, b) { return b.qty - a.qty; });
+  }
+
+  /* Hold that against the pharmacy's own Stock Out block. Same discipline as
+   * the money: a sheet that states nothing cannot be checked, and that is not
+   * the same as a sheet that checks out. */
+  function stockCrossCheck(parsed) {
+    var ours = componentMovement(parsed);
+    var mine = {}, problems = [];
+    ours.forEach(function (r) { mine[normKey(r.sku)] = r.qty; });
+
+    var stated = parsed.statedStockOut || [];
+    if (!stated.length) {
+      return {
+        ok: false, movement: ours, stated: [],
+        problems: ['this sheet carries no Stock Out summary, so there is nothing ' +
+                   'to check the product columns against'],
+      };
+    }
+    var theirs = {};
+    stated.forEach(function (r) { theirs[normKey(r.sku)] = (theirs[normKey(r.sku)] || 0) + r.qty; });
+
+    Object.keys(theirs).forEach(function (k) {
+      var name = stated.filter(function (r) { return normKey(r.sku) === k; })[0].sku;
+      if ((mine[k] || 0) !== theirs[k]) {
+        problems.push('the sheet says ' + theirs[k] + ' x ' + name +
+          ' went out, but its package columns add up to ' + (mine[k] || 0));
+      }
+    });
+    Object.keys(mine).forEach(function (k) {
+      if (theirs[k] === undefined) {
+        var name = ours.filter(function (r) { return normKey(r.sku) === k; })[0].sku;
+        problems.push(name + ' is in the package columns but not in the Stock Out summary');
+      }
+    });
+    return { ok: !problems.length, movement: ours, stated: stated, problems: problems };
   }
 
   /* Same package at the same price becomes one invoice line with the quantity
    * counted, which is how these have always been keyed by hand. */
   function packageLines(parsed) {
     var by = {}, order = [];
+    /* The components ride along, summed over the rows that collapsed into this
+       line, so `parts` is the TOTAL for the line rather than for one package.
+       That keeps the stock ledger a straight sum with no multiplying back out -
+       and it stays true even if two sheets state the same package's contents
+       differently, because it adds up what was actually written rather than
+       what a stored recipe says should have been. */
+    var addParts = function (into, from) {
+      (from || []).forEach(function (p) {
+        var k = normKey(p.sku);
+        if (!into.map[k]) { into.map[k] = { sku: p.sku, qty: 0 }; into.order.push(k); }
+        into.map[k].qty += p.qty;
+      });
+    };
     parsed.lines.forEach(function (l) {
       var key = normKey(l.pkg) + '|' + l.price.toFixed(2);
-      if (!by[key]) { by[key] = { pkg: l.pkg, price: l.price, qty: 0, gross: 0 }; order.push(key); }
+      if (!by[key]) {
+        by[key] = { pkg: l.pkg, price: l.price, qty: 0, gross: 0, _p: { map: {}, order: [] } };
+        order.push(key);
+      }
       by[key].qty += 1;
       by[key].gross = r2(by[key].gross + l.price);
+      addParts(by[key]._p, l.parts);
     });
-    return order.map(function (k) { return by[k]; });
+    return order.map(function (k) {
+      var r = by[k];
+      r.parts = r._p.order.map(function (pk) { return r._p.map[pk]; });
+      delete r._p;
+      return r;
+    });
+  }
+
+  /* The giveaways, in the same shape, so stock can be moved for them without
+   * their ever touching an invoice. Grouped by package because that is how a
+   * person reads them back: "two of these went out for nothing". */
+  function packageGiveawayLines(parsed) {
+    var by = {}, order = [];
+    (parsed.giveaways || []).forEach(function (g) {
+      if (!(g.parts || []).length) return;         // nothing left the shelf
+      var key = normKey(g.pkg);
+      if (!by[key]) { by[key] = { pkg: g.pkg, qty: 0, parts: {}, order: [] }; order.push(key); }
+      by[key].qty += 1;
+      g.parts.forEach(function (p) {
+        var k = normKey(p.sku);
+        if (!by[key].parts[k]) { by[key].parts[k] = { sku: p.sku, qty: 0 }; by[key].order.push(k); }
+        by[key].parts[k].qty += p.qty;
+      });
+    });
+    return order.map(function (k) {
+      var r = by[k];
+      return { pkg: r.pkg, qty: r.qty, price: 0, gross: 0,
+               parts: r.order.map(function (pk) { return r.parts[pk]; }) };
+    });
   }
 
   /* Hold our arithmetic against the pharmacy's own. A disagreement means the
@@ -1698,6 +1957,9 @@
     requireAccounts: requireAccounts,
     collapseItems: collapseItems,
     invoiceShape: invoiceShape, findHeaderRow: findHeaderRow, looksDate: looksDate, looksNum: looksNum,
+    componentMovement: componentMovement, stockCrossCheck: stockCrossCheck,
+    packageGiveawayLines: packageGiveawayLines,
+    productRollup: productRollup, shares: shares,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
   };

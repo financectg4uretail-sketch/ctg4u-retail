@@ -456,6 +456,13 @@
               brand_owner_id: l.project ? l.project.id : null,
               source_sheet: l._sheet || null, source_row: l._row || null,
               pharmacy_raw: l.pharmacyRaw || null, product_raw: l.productRaw || null,
+              /* Which product the line resolved to, and what was inside it if it
+                 was a bundle. The resolver worked both out; the run used to keep
+                 neither, so the stock ledger would have had to match the raw
+                 text a second time and could have reached a different answer
+                 than the month was billed on. */
+              product_id: l.product ? l.product.id : null,
+              parts: (l.parts && l.parts.length) ? l.parts : null,
               qty: l.qty, unit_price: l.unitPrice,
               gross: l.gross, discount: l.discount, net: l.net,
               issues: l.issues || []
@@ -464,6 +471,48 @@
         });
       }, Promise.resolve()).then(function () { return lines.length; });
     },
+    /* ------------------------------------------------------------- stock */
+
+    /* Every movement is a row and the balance is their sum, so there is no
+     * stored total that can drift from its own history. */
+    stock: {
+      balances: function (pharmacyId, brandOwnerId) {
+        return sb.rpc('stock_balances', {
+          p_pharmacy: pharmacyId || null, p_brand_owner: brandOwnerId || null
+        }).then(function (r) { fail('Read stock', r.error); return r.data || []; });
+      },
+      /* Replaces the whole opening set for one pharmacy - an opening balance is
+         a figure somebody counted, and half-applying it is worse than not. */
+      setOpening: function (pharmacyId, on, rows) {
+        return sb.rpc('stock_set_opening', {
+          p_pharmacy: pharmacyId, p_on: on || null, p_rows: rows || []
+        }).then(function (r) { fail('Save opening stock', r.error); return r.data; });
+      },
+      move: function (pharmacyId, productId, on, qty, kind, note) {
+        return sb.rpc('stock_move', {
+          p_pharmacy: pharmacyId, p_product: productId, p_on: on || null,
+          p_qty: qty, p_kind: kind, p_note: note || null
+        }).then(function (r) { fail('Record stock movement', r.error); return r.data; });
+      },
+      /* Posting is idempotent in the database, so a retry after a dropped
+         connection cannot decrement the shelf twice. */
+      postRun: function (runId) {
+        return sb.rpc('stock_post_run', { p_run_id: runId })
+          .then(function (r) { fail('Post stock for this run', r.error); return r.data || {}; });
+      },
+      unpostRun: function (runId) {
+        return sb.rpc('stock_unpost_run', { p_run_id: runId })
+          .then(function (r) { fail('Take back stock for this run', r.error); return r.data; });
+      },
+      history: function (pharmacyId, productId) {
+        return sb.from('stock_movements')
+          .select('moved_on,qty,kind,period,note,run_id')
+          .eq('pharmacy_id', pharmacyId).eq('product_id', productId)
+          .order('moved_on', { ascending: false }).limit(200)
+          .then(function (r) { return rows(r, 'Read stock history'); });
+      }
+    },
+
     /* Atomic. Two people finalising at the same second get different blocks. */
     reserveNumbers: function (docType, period, count) {
       return sb.rpc('reserve_doc_numbers', {
