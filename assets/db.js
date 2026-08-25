@@ -516,6 +516,14 @@
           p_pharmacy: pharmacyId || null, p_brand_owner: brandOwnerId || null
         }).then(function (r) { fail('Read stock movement', r.error); return r.data || []; });
       },
+      /* Whether a run's sales ever reached the ledger. Asked by the run detail,
+         because "finalised" and "the shelves know about it" are two different
+         facts and until now only one of them was ever shown. */
+      postedCount: function (runId) {
+        return sb.from('stock_movements').select('id', { count: 'exact', head: true })
+          .eq('run_id', runId)
+          .then(function (r) { fail('Check posted stock', r.error); return r.count || 0; });
+      },
       history: function (pharmacyId, productId) {
         return sb.from('stock_movements')
           .select('moved_on,qty,kind,period,note,run_id')

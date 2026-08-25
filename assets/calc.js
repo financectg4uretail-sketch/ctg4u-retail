@@ -220,6 +220,64 @@
     return c;
   }
 
+  /* Rates that are almost certainly wrong.
+   *
+   * These four numbers are the most dangerous values in the system and the only
+   * ones with no check on them at all. Every other mistake announces itself:
+   * an unmapped product sits on the Review tab, a bad account code makes Xero
+   * reject the import, a row that will not add up trips the cross-check. A rate
+   * typed as 1.92 instead of 19.2 does none of that. It produces a complete,
+   * internally consistent month - the pharmacy invoices, the settlement and the
+   * payout bills all agree with each other, because they are all built from the
+   * same wrong number - and crossCheck passes, because it compares the two
+   * sides rather than either side against reality.
+   *
+   * So this does not decide anything; it says what looks wrong and leaves the
+   * judgement where it belongs. A rate CAN legitimately be unusual, which is
+   * why nothing here blocks. What is not acceptable is it passing unremarked.
+   */
+  function rateWarnings(c) {
+    c = cfg(c);
+    var out = [];
+    var n = function (v) { return typeof v === 'number' ? v : num(v); };
+
+    var d = n(c.discountPct);
+    if (d < 0 || d >= 100) {
+      out.push('The pharmacy discount is ' + d + '%. Outside 0-100 it stops being a discount: ' +
+        'every net line would come out negative.');
+    } else if (d > 0 && d < 5) {
+      /* The realistic slip is one decimal place, and 19.2 becomes 1.92 - which
+         is not under one per cent, so a tighter test than this catches nothing.
+         Phrased as a question because a small discount is possible; what is not
+         possible is it being intended and nobody noticing either way. */
+      out.push('The pharmacy discount is ' + d + '%. Was ' + r2(d * 10) +
+        '% meant? A decimal point one place out reads exactly like this, and every ' +
+        'document in the run would agree with itself either way.');
+    }
+
+    var s = n(c.serviceFeePct);
+    if (s < 0 || s > 25) out.push('The service fee is ' + s + '% of gross sales, which is far ' +
+      'outside anything these contracts use.');
+    else if (s > 0 && s < 0.5) out.push('The service fee is ' + s + '% of gross sales. Was ' +
+      r2(s * 10) + '% meant?');
+
+    var t = n(c.sstPct);
+    if ([0, 6, 8, 10].indexOf(t) < 0) {
+      out.push('SST is set to ' + t + '%. Malaysian service tax has been 6%, 8% or 10%; ' +
+        'anything else is worth a second look before it goes on an invoice.');
+    }
+
+    var m = n(c.mgmtFeePerPharmacy);
+    if (m < 0) out.push('The management fee is negative, so each pharmacy would ADD to the payout.');
+    else if (m > 5000) out.push('The management fee is MYR ' + money(m) + ' per pharmacy per month.');
+
+    var i = n(c.insuranceFeePct);
+    if (i < 0 || i > 10) out.push('The insurance rate is ' + i + '%, which the pharmacy sheets ' +
+      'will print as-is whether or not it is deducted.');
+
+    return out;
+  }
+
   /* --------------------------------------------------------------- dates */
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -282,18 +340,46 @@
     // Product -> project lookup, exact first for speed then fuzzy.
     // Aliases are what the operator confirmed by hand in a previous month; they
     // win over fuzzy matching so a once-corrected name never drifts back.
-    var prodIndex = {};
+    /* These were plain assignments, and a plain assignment loses.
+     *
+     * normKey is deliberately aggressive: it drops punctuation, and SDN BHD,
+     * and PLT. So two separate legal entities, or two products belonging to two
+     * different brand owners, can arrive at one key while looking nothing alike
+     * in the master - and whichever happened to be loaded second then answered
+     * for both, silently. This index decides who gets paid.
+     *
+     * The database cannot catch it either: products are unique on lower(name),
+     * which is a weaker rule than this one, and pharmacy aliases have no
+     * uniqueness at all. So a collision is recorded here and the caller refuses,
+     * exactly as it already refuses a tie in the fuzzy matcher. Nothing in the
+     * master collides today; the point is that it may, and the first sign would
+     * otherwise be a payout to the wrong company. */
+    function indexer() {
+      var map = {}, clash = {};
+      return {
+        add: function (key, item) {
+          if (!key) return;
+          if (clash[key]) { if (clash[key].indexOf(item) < 0) clash[key].push(item); return; }
+          if (map[key] && map[key] !== item) { clash[key] = [map[key], item]; return; }
+          map[key] = item;
+        },
+        get: function (key) { return clash[key] ? null : (map[key] || null); },
+        rivals: function (key) { return clash[key] || null; }
+      };
+    }
+
+    var prodIndex = indexer();
     products.forEach(function (p) {
-      if (p.sku) prodIndex[normKey(p.sku)] = p;
-      if (p.name) prodIndex[normKey(p.name)] = p;
-      (p.aliases || []).forEach(function (a) { if (a) prodIndex[normKey(a)] = p; });
+      if (p.sku) prodIndex.add(normKey(p.sku), p);
+      if (p.name) prodIndex.add(normKey(p.name), p);
+      (p.aliases || []).forEach(function (a) { if (a) prodIndex.add(normKey(a), p); });
     });
-    var pharmIndex = {};
+    var pharmIndex = indexer();
     pharmacies.forEach(function (p) {
-      (p.aliases || []).forEach(function (a) { if (a) pharmIndex[normKey(a)] = p; });
+      (p.aliases || []).forEach(function (a) { if (a) pharmIndex.add(normKey(a), p); });
     });
-    var projByCode = {};
-    projects.forEach(function (p) { projByCode[normKey(p.code)] = p; projByCode[normKey(p.name)] = p; });
+    var projByCode = indexer();
+    projects.forEach(function (p) { projByCode.add(normKey(p.code), p); projByCode.add(normKey(p.name), p); });
 
     var pharmCache = {}, prodCache = {};
 
@@ -314,9 +400,11 @@
       // --- pharmacy
       var pk = normKey(out.pharmacyRaw);
       if (!(pk in pharmCache)) {
+        var pClash = pharmIndex.rivals(pk), pExact = pharmIndex.get(pk);
         pharmCache[pk] = !out.pharmacyRaw ? null
-          : pharmIndex[pk] ? { item: pharmIndex[pk], score: 1 }
-            : bestMatch(out.pharmacyRaw, pharmacies, ['trading', 'contact', 'code']);
+          : pClash ? { item: pClash[0], score: 1, rivals: pClash.length, tied: pClash }
+          : pExact ? { item: pExact, score: 1, rivals: 1, tied: [pExact] }
+          : bestMatch(out.pharmacyRaw, pharmacies, ['trading', 'contact', 'code']);
       }
       var pm = pharmCache[pk];
 
@@ -327,7 +415,13 @@
        * The confirmed alias still wins outright, which is how the operator
        * settles it once and never sees it again. Same rule the product side
        * already had for MIZINO PREMIUM against MIZINO PLACENTA. */
-      var ambiguous = !!(pm && pm.score < 1 && pm.rivals > 1);
+      /* `pm.score < 1` used to be part of this test, which exempted the one
+       * case it most needed to cover. normKey drops SDN BHD and PLT, so ABC
+       * PHARMACY SDN BHD and ABC PHARMACY PLT - two companies, two tax numbers,
+       * two Xero contacts - both normalise to ABC PHARMACY and both score
+       * exactly 1.0 against a sheet naming either. A tie at 1.0 is still a tie,
+       * and it was the only kind being broken quietly. */
+      var ambiguous = !!(pm && pm.rivals > 1);
       out.pharmacy = pm && !ambiguous ? pm.item : null;
       out.pharmacyScore = pm ? pm.score : 0;
       out.pharmacySuggestion = ambiguous ? pm.item : null;
@@ -346,12 +440,15 @@
        * against Zeero-A-2 scores only 0.60, so a single 0.72 gate would have
        * left the operator staring at an empty dropdown with no hint at all. */
       if (!(dk in prodCache)) {
-        var exact = prodIndex[dk] || null, near = null, nearScore = 0;
+        var dClash = prodIndex.rivals(dk);
+        var exact = dClash ? null : prodIndex.get(dk), near = null, nearScore = 0;
+        var nearRivals = 0, nearTied = null;
         if (!exact && out.productRaw) {
           var bm = bestMatch(out.productRaw, products, ['sku', 'name'], SUGGEST_AT);
-          if (bm) { near = bm.item; nearScore = bm.score; }
+          if (bm) { near = bm.item; nearScore = bm.score; nearRivals = bm.rivals; nearTied = bm.tied; }
         }
-        prodCache[dk] = { exact: exact, near: near, nearScore: nearScore };
+        prodCache[dk] = { exact: exact, near: near, nearScore: nearScore,
+                          rivals: nearRivals, tied: nearTied, clash: dClash };
       }
       var pc = prodCache[dk];
 
@@ -361,24 +458,57 @@
        * PLACENTA and MIZINO ENZYME - three DIFFERENT legal entities sharing a
        * word. Similarity cannot tell them apart, and guessing wrong pays the
        * settlement to the wrong company. Same rule as the pharmacy rename path. */
+      /* A near match that TIES is no more usable than an exact one that ties.
+       *
+       * similarity() is deliberately generous where one name sits inside
+       * another, and the comment there says that is safe because "if two
+       * products both contain the typed name they score the same, tie, and
+       * resolveLines refuses rather than picking the first". bestMatch counts
+       * the rivals for exactly this. The pharmacy side reads that count; this
+       * side took the item and the score and dropped it on the floor, so the
+       * generosity was resting on a check that had never been written. Two
+       * products tying at 0.9 handed the month to whichever was loaded first. */
+      var nearTie = pc.rivals > 1;
       out.product = pc.exact ||
-        (L.strictProduct || pc.nearScore < APPLY_AT ? null : pc.near);
+        (L.strictProduct || nearTie || pc.nearScore < APPLY_AT ? null : pc.near);
       out.productSuggestion = (!out.product && pc.near) ? pc.near : null;
       out.productSuggestionScore = out.productSuggestion ? pc.nearScore : 0;
+      /* Reported the same way the pharmacy side reports its rivals, because the
+         Review tab has to be able to explain itself: a row that plainly names a
+         product the operator can see in the master reads as a system failure
+         unless the reason is on screen. */
+      out.productRivals = pc.clash || (nearTie ? pc.tied : null);
 
       /* Resolution order: what the product is mapped to wins, because one sheet
        * can now mix several brands. `projectCode` is the fallback a
        * single-brand file supplies for the whole sheet. */
       if (out.product) {
-        out.project = projByCode[normKey(out.product.project)] || null;
-        if (!out.project) out.issues.push('brand owner "' + out.product.project + '" not in master');
+        out.project = projByCode.get(normKey(out.product.project));
+        if (!out.project) out.issues.push(projByCode.rivals(normKey(out.product.project))
+          ? 'brand owner "' + out.product.project + '" matches more than one master record'
+          : 'brand owner "' + out.product.project + '" not in master');
       } else if (L.projectCode) {
-        out.project = projByCode[normKey(L.projectCode)] || null;
-        if (!out.project) out.issues.push('brand owner "' + L.projectCode + '" not in master');
+        out.project = projByCode.get(normKey(L.projectCode));
+        if (!out.project) out.issues.push(projByCode.rivals(normKey(L.projectCode))
+          ? 'brand owner "' + L.projectCode + '" matches more than one master record'
+          : 'brand owner "' + L.projectCode + '" not in master');
       } else {
         out.project = null;
       }
 
+      if (!pc.clash && nearTie && pc.nearScore >= APPLY_AT) {
+        out.issues.push('"' + out.productRaw + '" matches ' + pc.rivals +
+          ' products equally well: ' +
+          (pc.tied || []).map(function (x) {
+            return x.name + ' (' + (x.project || 'no brand owner') + ')';
+          }).join(', ') + ' — pick one, because this decides which brand owner is paid');
+      }
+      if (pc.clash) {
+        out.issues.push('"' + out.productRaw + '" is the same name as ' + pc.clash.length +
+          ' products once punctuation is ignored: ' +
+          pc.clash.map(function (x) { return x.name + ' (' + (x.project || 'no brand owner') + ')'; }).join(', ') +
+          ' — rename one of them, because this decides which brand owner is paid');
+      }
       if (!out.productRaw) {
         out.issues.push(L.strictProduct ? 'no package on row' : 'no product on row');
       } else if (!out.project) {
@@ -2098,7 +2228,7 @@
   /* ------------------------------------------------------------- exports */
 
   return {
-    DEFAULTS: DEFAULTS, cfg: cfg,
+    DEFAULTS: DEFAULTS, cfg: cfg, rateWarnings: rateWarnings,
     r2: r2, sum: sum, sumMoney: sumMoney, money: money, num: num,
     normKey: normKey, similarity: similarity, bestMatch: bestMatch,
     monthEnd: monthEnd,

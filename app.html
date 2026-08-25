@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=e8e767df69">
+<link rel="stylesheet" href="assets/app.css?v=6ac1db8546">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -234,6 +234,7 @@
     <h2>Commercial terms</h2>
     <div class="hint">These drive every number in the run. Change them here, never in the output files.</div>
     <div class="grid g3" id="cfgTerms"></div>
+    <div id="cfgWarn" style="margin-top:14px"></div>
   </div>
   <div class="card">
     <h2>Xero connection</h2>
@@ -290,9 +291,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=45df69b538"></script>
+<script src="assets/db.js?v=c6e3bd259f"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=72095f5e17"></script>
+<script src="assets/calc.js?v=db3ec26de1"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -313,7 +314,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '1c8d8f886f44';
+  var MINE = '711ab308ece5';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2876,13 +2877,28 @@ function openingStock() {
     return;
   }
   var ph = ST.master.pharmacies.filter(function (p) { return p.id === STOCK.pharmacy; })[0];
+  /* Single SKUs only. The heading two lines up already says stock is counted at
+     the SKU and never at the bundle, and the delivery form has always honoured
+     that - this one listed every bundle as well, so a master holding 180
+     packages and 72 products offered 252 rows of which 180 could not
+     legitimately be counted. A bundle given a balance this way never went down
+     again either, because a sale moves the products inside a package, not the
+     package, so it sat on the report as a number that could only grow. */
   var prods = ST.master.products.filter(function (p) {
-    return !STOCK.owner || p.brandOwnerId === STOCK.owner || p.project === STOCK.owner;
+    return !p.isBundle && (!STOCK.owner || p.brandOwnerId === STOCK.owner);
   });
   if (!prods.length) {
-    toast('No products to count yet — add them on the Contacts tab first', 'warn');
+    toast('No single SKUs to count yet — importing the bundles is what creates them', 'warn');
     return;
   }
+
+  /* A bundle that already carries an opening balance from before this was fixed
+     is about to disappear, because saving replaces the pharmacy's whole opening
+     set. A figure vanishing without a word is its own bug, so it is named. */
+  var strays = STOCK.rows.filter(function (r) {
+    var p = ST.master.products.filter(function (x) { return x.name === r.product_name; })[0];
+    return p && p.isBundle && +r.opening;
+  });
 
   var had = {};
   STOCK.rows.filter(function (r) { return r.pharmacy_trading === ph.trading; })
@@ -2890,7 +2906,15 @@ function openingStock() {
 
   var h = '<div class="card"><h2>Opening stock &mdash; ' + esc(ph.trading) + '</h2>' +
     '<div class="hint">What was on the shelf before this system started counting. Saving replaces ' +
-    'this pharmacy\'s whole opening set, so enter the full count, not just what changed.</div>' +
+    'this pharmacy\'s whole opening set, so enter the full count, not just what changed. ' +
+    'Only single SKUs are counted &mdash; a package is a way of selling them, not a thing ' +
+    'that sits on a shelf.</div>' +
+    (strays.length
+      ? '<div class="note warn"><b>' + strays.length + ' bundle(s) carry an opening balance</b> ' +
+        'that should never have been recorded against a package: ' +
+        esc(strays.map(function (r) { return r.product_name + ' (' + CB.r2(+r.opening) + ')'; }).join(', ')) +
+        '. Saving this form clears them.</div>'
+      : '') +
     '<div class="row" style="margin-top:10px;gap:8px;align-items:center">' +
       '<label>Counted on</label><input type="date" id="openOn" value="' +
       esc(CB.monthStart(ST.cfg.period)) + '"></div>' +
@@ -2984,7 +3008,12 @@ function renderReview() {
     h += '<div class="card"><h2>Assign products to a brand owner</h2>' +
       '<div class="hint">Assign once &mdash; the name is remembered as an alias, so next month it resolves by itself. ' +
       'Nothing can be finalised while any of these is unassigned: an unattributed row would drop out of the ' +
-      'invoices and the settlement together, which balances perfectly and loses the money.</div>' +
+      'invoices and the settlement together, which balances perfectly and loses the money.' +
+      (pk.filter(function (x) { return (noProd[x][0].productRivals || []).length > 1; }).length
+        ? ' <b>Some of these are not unknown at all</b> &mdash; the master holds two products ' +
+          'whose names match once punctuation is ignored, and one of them has to be renamed ' +
+          'before either can be used.'
+        : '') + '</div>' +
       '<div class="scroll"><table><tr><th>Product on the file</th><th class="num">Rows</th><th class="num">Gross</th><th>Brand owner</th></tr>' +
       pk.map(function (p) {
         var ls = noProd[p];
@@ -2993,9 +3022,22 @@ function renderReview() {
          * different companies, so a resemblance is a prompt, never an answer. */
         var sug = ls[0].productSuggestion || null;
         var sugCode = sug ? sug.project : '';
-        return '<tr><td><b>' + esc(p) + '</b><div class="mut">' + esc(ls[0]._sheet) + ' row ' + ls[0]._row +
-          (sug ? ' &middot; closest known package: <b>' + esc(sug.name) + '</b> &mdash; check it is the same brand' : '') +
-          '</div></td>' +
+        /* Two products the master genuinely holds, whose names are the same once
+           punctuation is ignored. Assigning a brand owner here does NOT fix
+           that - it reassigns one of the two - so the row says what the actual
+           remedy is instead of leaving the operator to guess from a dropdown. */
+        var rivals = ls[0].productRivals || [];
+        return '<tr class="' + (rivals.length > 1 ? 'bad' : '') + '"><td><b>' + esc(p) +
+          '</b><div class="mut">' + esc(ls[0]._sheet) + ' row ' + ls[0]._row +
+          (rivals.length > 1
+            ? '</div><div class="badge bad" style="margin-top:5px;white-space:normal;line-height:1.5">' +
+              'The master holds ' + rivals.length + ' products with this name: ' +
+              esc(rivals.map(function (x) { return x.name + ' (' + (x.project || 'no brand owner') + ')'; }).join(', ')) +
+              '. Rename one on the Master data tab &mdash; choosing a brand owner here moves ' +
+              'one of them instead of separating them.</div>'
+            : (sug ? ' &middot; closest known package: <b>' + esc(sug.name) + '</b> &mdash; check it is the same brand</div>'
+                   : '</div>')) +
+          '</td>' +
           '<td class="num">' + ls.length + '</td>' +
           '<td class="num">' + M(CB.sumMoney(ls, function (l) { return l.gross; })) + '</td>' +
           '<td>' + projectSelect('mapProduct(this,' + JSON.stringify(p).replace(/"/g, '&quot;') + ')', sugCode) +
@@ -3092,15 +3134,43 @@ function mapProduct(sel, rawName) {
            (p.aliases || []).some(function (a) { return CB.normKey(a) === key; });
   })[0];
 
-  var row = existing
-    ? { id: existing.id, sku: existing.sku || '', name: existing.name,
-        brandOwnerId: proj.id, active: true,
-        aliases: (existing.aliases || []).concat(
-          (existing.aliases || []).indexOf(rawName) < 0 && CB.normKey(existing.name) !== key ? [rawName] : []) }
-    : { sku: '', name: rawName, brandOwnerId: proj.id, aliases: [rawName], active: true };
+  /* Two different writes, and they used to be one.
+   *
+   * THE ALIAS went up as a read-modify-write of the whole array: read what this
+   * tab last saw, append to it, send the lot back. The pharmacy side stopped
+   * doing that - product_add_alias appends inside the database in one statement
+   * - and the data layer's own comment says why: this application is routinely
+   * used with two tabs open, so two aliases saved in the same moment meant the
+   * second write carried a copy of the array from before the first, and one of
+   * them simply vanished. The fix existed and was wired to only one of the two
+   * callers. An alias that disappears costs a month: the name is fuzzy-matched
+   * again next time, and the operator confirms it a second time never knowing
+   * they already had.
+   *
+   * THE BRAND OWNER is the other write, and it is not cosmetic - it decides who
+   * gets paid for every line naming this product, past reports included. Moving
+   * an EXISTING product between owners is therefore asked about rather than
+   * done on the way past. */
+  if (existing && existing.brandOwnerId && existing.brandOwnerId !== proj.id) {
+    var from = ST.master.projects.filter(function (p) { return p.id === existing.brandOwnerId; })[0];
+    if (!confirm('"' + existing.name + '" currently belongs to ' +
+      (from ? from.name : 'another brand owner') + '.\n\n' +
+      'Mapping it to ' + proj.name + ' moves the product itself, so every line naming it ' +
+      'settles to ' + proj.name + ' from now on.\n\nMove it?')) return;
+  }
 
   sel.disabled = true;
-  DB.saveProduct(row)
+  var work = existing
+    ? (CB.normKey(existing.name) === key
+        ? Promise.resolve()                       // the name already IS the product
+        : DB.addProductAlias(existing.id, rawName))
+        .then(function () {
+          return DB.saveProduct({ id: existing.id, brandOwnerId: proj.id, active: true });
+        })
+    : DB.saveProduct({ sku: '', name: rawName, brandOwnerId: proj.id,
+                       aliases: [rawName], active: true });
+
+  work
     .then(function () { return refreshMaster(); })
     .then(function () {
       renderReview();
@@ -4055,11 +4125,29 @@ function renderCfg() {
   mk('#cfgCompany', CFG_FIELDS.company);
   mk('#cfgTerms', CFG_FIELDS.terms); mk('#cfgXero', CFG_FIELDS.xero);
   mk('#cfgTrack', CFG_FIELDS.tracking); mk('#cfgNum', CFG_FIELDS.num);
+  renderRateWarnings();
+}
+
+/* These rates are the one set of numbers a wrong value does not announce
+   itself in: every document agrees with every other, because they are all
+   built from it. Said out loud here rather than blocking, because a rate can
+   legitimately be unusual - what it cannot be is unremarked. */
+function renderRateWarnings() {
+  var host = $('#cfgWarn'); if (!host) return;
+  var w = CB.rateWarnings(ST.cfg);
+  host.innerHTML = w.length
+    ? '<div class="note warn"><b>Check these rates before billing a month.</b><ul style="margin:8px 0 0;padding-left:20px">' +
+      w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>'
+    : '';
 }
 function setCfg(k, v) {
   if (typeof CB.DEFAULTS[k] === 'number') v = CB.num(v);
   if (typeof CB.DEFAULTS[k] === 'boolean') v = !!v;
   ST.cfg[k] = v; save(); recompute();
+  /* The moment a rate changes is the moment the warning is worth reading, and
+     setCfg does not re-render the settings panel - so putting the check only in
+     renderCfg() meant it appeared on arrival and never again. */
+  renderRateWarnings();
   toast('Setting saved — all figures recalculated');
 }
 
@@ -4234,6 +4322,11 @@ function finaliseRun() {
       ? '\n\nNOTE: ' + st.documentCount + ' document number(s) were already issued for this period. ' +
         'The new ones continue after them, so nothing will clash.'
       : '';
+    var rw = CB.rateWarnings(ST.cfg);
+    if (rw.length && !confirm('Before finalising ' + CB.periodLabel(period) + ', check these rates:\n\n' +
+      rw.map(function (x) { return '  \u2022 ' + x; }).join('\n\n') +
+      '\n\nEvery document in this run is built from them. Carry on?')) { release(); return; }
+
     if (!confirm('Finalise ' + CB.periodLabel(period) + '?\n\n' +
       ST.billing.length + ' pharmacy invoices\n' +
       ST.settlement.projects.length + ' brand owner fee invoices and payout bills\n' +
@@ -4292,27 +4385,104 @@ function finaliseRun() {
          the database that either happens or does not. The row count goes with
          it, so a batch that failed on the way up cannot be finalised over. */
       var runId, expected = ST.lines.length, stockMoved = null, stockErr = null;
+      /* Everything after commit_run is housekeeping - the audit row, the run
+         list, the stock. If one of those fails the month IS finalised, so the
+         failure message must not go on saying nothing was written. */
+      var committed = false;
       DB.createRun(period, ST.cfg, totals, ST.sheets.map(function (x) { return x.file; }))
         .then(function (run) { runId = run.id; ST.runId = runId; return DB.saveRunLines(runId, ST.lines); })
         .then(function () {
           return DB.commitRun(runId, expected, totals, ST.settlement.projects, docs);
         })
-        .then(function () { return DB.audit('run_finalised', { period: period, totals: totals }); })
+        .then(function () { committed = true; })
+        /* The invoices exist from here on, and the shelves have to be told.
+         *
+         * This call was written, wrapped in the data layer, given a database
+         * function that is idempotent and takes a row lock - and then never
+         * made from anywhere. The two variables above were declared to hold its
+         * result and left unused, which is the whole fingerprint: somebody
+         * meant to call it. Nothing else in the system moves stock out, so
+         * every month billed so far would have left the ledger showing only
+         * what came IN, with the sold column sitting at zero for ever.
+         *
+         * Deliberately a SECOND step rather than part of commit_run: a
+         * component missing from the product master must never be able to stop
+         * a month being billed. It is idempotent, so it can simply be run again
+         * once the master is fixed - which is what the button on the run detail
+         * is for. What it must not do is fail quietly. */
+        .then(function () {
+          /* A build whose data layer is older than this page would throw a
+             TypeError here, and the handler below would then report a month
+             that IS finalised as one that was not - the worst possible sentence
+             to be wrong about. Checked rather than assumed, for the same reason
+             a single-file app has to check its own scripts loaded. */
+          if (!DB.stock || typeof DB.stock.postRun !== 'function') {
+            stockErr = new Error('this build has no stock ledger to post to');
+            return;
+          }
+          return DB.stock.postRun(runId).then(
+            function (res) { stockMoved = res; },
+            function (e) { stockErr = e; });
+        })
+        .then(function () {
+          return DB.audit('run_finalised', { period: period, totals: totals,
+            stock: stockErr ? { failed: String(stockErr.message || stockErr) } : stockMoved });
+        })
         .then(loadRuns)
         .then(function () {
           release();
           renderOut();
           renderXeroPost();
           toast('Finalised. ' + docs.length + ' document numbers issued and recorded.', 'ok');
+          reportStockPost(stockMoved, stockErr);
           go('runs');
         }, function (e) {
           release();
           err(e);
-          toast('The run was NOT finalised - nothing was written. The reserved numbers stay ' +
-                'burnt, which is safe: the next run continues after them.', 'bad');
+          toast(committed
+            ? 'The run WAS finalised and its documents are recorded — what failed came after ' +
+              'that: ' + (e.message || String(e)) + '. Open it on the History tab to check the ' +
+              'stock, and do not bill this period again.'
+            : 'The run was NOT finalised - nothing was written. The reserved numbers stay ' +
+              'burnt, which is safe: the next run continues after them.', 'bad');
         });
     }, function (e) { release(); err(e); });
   }, function (e) { release(); err(e); });
+}
+
+/* What the ledger did with this run, said out loud.
+ *
+ * By the time this runs the invoices are committed, so a stock failure is not a
+ * failed month - but it is a month whose shelf figures are now wrong, and that
+ * has to be as visible as the success was. Everything stock_post_run could not
+ * move is named one by one, because a count of what DID move reads exactly the
+ * same whether or not half of it was silently dropped. */
+function reportStockPost(res, e) {
+  if (e) {
+    toast('The invoices are finalised, but THE STOCK DID NOT MOVE: ' +
+      (e.message || String(e)) + ' — the billing is unaffected. Open this run on the ' +
+      'History tab and press "Post stock" once the cause is fixed.', 'bad');
+    return;
+  }
+  if (!res) return;
+  if (res.already) { toast('Stock had already been posted for this run.', 'warn'); return; }
+
+  toast((res.moved || 0) + ' stock line(s) moved out of the pharmacies.', 'ok');
+
+  var notes = [];
+  if ((res.unknownComponents || []).length) {
+    notes.push(res.unknownComponents.length + ' component name(s) are not in the product ' +
+      'master, so no stock moved for them: ' + res.unknownComponents.join(', '));
+  }
+  if (res.linesWithoutProduct) {
+    notes.push(res.linesWithoutProduct + ' line(s) reached a brand owner but not a product, ' +
+      'so no stock moved for them either');
+  }
+  if (res.droppedNonPositive) {
+    notes.push(res.droppedNonPositive + ' product(s) had more returned than sold this month, ' +
+      'which cannot be written as a sale and was left out');
+  }
+  if (notes.length) toast('Not everything moved. ' + notes.join('. ') + '.', 'warn');
 }
 
 /* ------------------------------------------------------------------ Xero */
@@ -4453,7 +4623,12 @@ function renderRuns() {
 }
 
 function showRun(id) {
-  DB.getRun(id).then(function (d) {
+  /* "Finalised" and "the shelves know about it" are two different facts, and
+     only one of them was ever on screen. A toast at the end of finalising is
+     gone by the next click; this is where somebody comes back to ask. */
+  Promise.all([DB.getRun(id), DB.stock.postedCount(id).catch(function () { return null; })])
+    .then(function (both) {
+    var d = both[0], postedRows = both[1];
     var byType = {};
     d.documents.forEach(function (x) { (byType[x.doc_type] = byType[x.doc_type] || []).push(x); });
     var label = {
@@ -4467,6 +4642,21 @@ function showRun(id) {
       '<div class="hint">Rates used: discount ' + CB.r2(d.run.cfg.discountPct) + '%, management fee MYR ' +
       CB.money(d.run.cfg.mgmtFeePerPharmacy) + ' per pharmacy, service fee ' + CB.r2(d.run.cfg.serviceFeePct) +
       '% of gross, SST ' + CB.r2(d.run.cfg.sstPct) + '%.</div>' +
+
+      /* Posting is idempotent, so the button is safe to press at any time - it
+         answers "already done" rather than moving anything twice. */
+      (d.run.status === 'final' && postedRows !== null
+        ? (postedRows
+            ? '<div class="hint"><b>Stock:</b> ' + postedRows + ' line(s) moved out of the ' +
+              'pharmacies for this run.</div>'
+            : '<div class="note warn"><b>No stock moved for this run.</b> The invoices are ' +
+              'unaffected, but every pharmacy&rsquo;s shelf still shows these goods as unsold. ' +
+              (CAN_WRITE
+                ? '<div class="row" style="margin-top:9px"><button class="btn sm" onclick="postStock(&#39;' +
+                  esc(d.run.id) + '&#39;)">Post stock for this run</button></div>'
+                : 'An administrator can post it.') +
+              '</div>')
+        : '') +
 
       '<table style="margin-bottom:16px"><tr><th>Brand owner</th><th class="num">Sales</th>' +
       '<th class="num">Net sales</th><th class="num">Fees</th><th class="num">SST</th>' +
@@ -4491,6 +4681,23 @@ function showRun(id) {
       }).join('') + '</div>';
     $('#runDetail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, err);
+}
+
+/* Move a finalised run's sales out of the pharmacies, now or later.
+ *
+ * Separate from finalising on purpose: a component the product master has never
+ * heard of should not be able to stop a month being billed, so the billing goes
+ * through and this is left to be pressed once the master is right. The database
+ * function refuses to do it twice. */
+function postStock(id) {
+  if (!requireWrite()) return;
+  DB.stock.postRun(id)
+    .then(function (res) {
+      reportStockPost(res, null);
+      return DB.audit('stock_posted', { run: id, result: res });
+    })
+    .then(function () { showRun(id); })
+    .catch(function (e) { reportStockPost(null, e); });
 }
 
 /* Voiding keeps the run and its numbers on record. The numbers stay burnt on
@@ -4521,14 +4728,21 @@ function voidRun(id) {
 
     var note = prompt('Why is this run being voided? (kept on the record)');
     if (note === null) return;
+    var back = 0;
     return DB.voidRun(id, note)
+      /* The goods never left, so the ledger must not go on saying they did.
+         A document number stays burnt because it may be in Xero already; a
+         stock movement has no such life outside this database, so it goes. */
+      .then(function () { return DB.stock.unpostRun(id).then(function (n) { back = n; }); })
       .then(function () {
-        return DB.audit('run_voided', { run: id, note: note, alreadyInXero: posted.length });
+        return DB.audit('run_voided', { run: id, note: note,
+          alreadyInXero: posted.length, stockTakenBack: back });
       })
       .then(loadRuns)
       .then(function () {
         toast('Run voided. Its document numbers stay reserved' +
-          (posted.length ? ' — and ' + posted.length + ' invoice(s) are still in Xero' : '') + '.',
+          (back ? ', and ' + back + ' stock line(s) came back onto the shelves' : '') +
+          (posted.length ? ' — but ' + posted.length + ' invoice(s) are still in Xero' : '') + '.',
           posted.length ? 'warn' : 'ok');
       });
   }).catch(err);

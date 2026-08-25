@@ -321,6 +321,16 @@ tr:hover td{background:var(--surface-2)}
   text-align:right;font-family:var(--num);font-variant-numeric:tabular-nums;
   white-space:nowrap;font-feature-settings:"tnum" 1;
 }
+
+/* A stock line below zero is a physical impossibility - more went out than ever
+   came in - so it is the one row on the page that must be found without reading
+   every number. Both the stock table and the movement report were already
+   setting this class on such a row; nothing had ever styled it, so the one row
+   that matters looked exactly like the rest. */
+tr.bad td{background:var(--bad-bg);color:var(--bad-tx)}
+tr.bad:hover td{background:#f6dcdc}
+tr.bad td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
+tr.bad td.num{color:var(--bad-tx);font-weight:600}
 th.num{text-align:right}
 /* The page reaches the window edge; a table does not. Past about 1400px the
    eye has to travel too far from a pharmacy's name to its amount, and on a
