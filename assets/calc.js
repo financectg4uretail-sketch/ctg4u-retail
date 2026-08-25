@@ -201,6 +201,7 @@
     pharmacyInvPrefix: 'CTG4U',  // -> CTG4U2607-0001
     serviceInvPrefix: 'CTGSF',
     payoutBillPrefix: 'CTGPO',
+    deliveryOrderPrefix: 'CTGDO',
     startNumber: 1,
     // Per-type starts. The website reserves a block of numbers from the
     // database for each document type, so the three sequences advance
@@ -818,6 +819,163 @@
     });
 
     return { findings: out, bad: out.filter(function (x) { return !x.ok; }).length };
+  }
+
+  /* ------------------------------------------------------ delivery order */
+
+  /* The paper that travels with the goods.
+   *
+   * A delivery order is not a small invoice. Nothing on it is priced, because
+   * nothing is being sold yet - and that is the whole point of the document in
+   * a consignment arrangement. It records that goods moved, and that title did
+   * NOT. Putting prices on it would invite a pharmacy to treat it as a purchase,
+   * which is precisely the thing the arrangement is not.
+   *
+   * Two audiences, in this order: the person at the counter receiving the boxes,
+   * who needs to count them and sign; and whoever later asks where a particular
+   * unit came from, who needs the number and the date.
+   */
+  function deliveryOrderHTML(d, c) {
+    c = cfg(c);
+    var ph = d.pharmacy || {};
+    var rows = d.lines || [];
+
+    var kv = function (k, v) {
+      return v ? '<div><span>' + k + '</span><b>' + esc(v) + '</b></div>' : '';
+    };
+    var addr = lines(c.coAddress).map(function (l) {
+      return '<div>' + esc(l) + '</div>';
+    }).join('');
+
+    /* Grouped by brand owner, because a van drop covers several brands and the
+       person checking it counts one brand's boxes at a time. */
+    var byOwner = {}, order = [];
+    rows.forEach(function (L) {
+      var k = L.brandOwnerCode || L.brandOwner || '';
+      if (!byOwner[k]) { byOwner[k] = { name: L.brandOwner || k, rows: [] }; order.push(k); }
+      byOwner[k].rows.push(L);
+    });
+
+    var units = rows.reduce(function (t, L) { return t + num(L.qty); }, 0);
+    var body = order.map(function (k) {
+      var g = byOwner[k];
+      return '<tr class="grp"><td colspan="4">' + esc(g.name) + '</td></tr>' +
+        g.rows.map(function (L) {
+          return '<tr><td>' + esc(L.product) + '</td>' +
+            '<td class="sku">' + esc(L.sku || '') + '</td>' +
+            '<td class="n">' + num(L.qty) + '</td>' +
+            '<td class="chk"></td></tr>';
+        }).join('');
+    }).join('');
+
+    return '<section class="do">' +
+      '<div class="band"><span class="bco">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</span>' +
+      '<span class="bti">Delivery Order' +
+        (d.status === 'cancelled' ? ' &mdash; CANCELLED' : '') + '</span></div>' +
+
+      '<div class="head">' +
+        '<div class="issuer">' +
+          '<div class="co">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</div>' +
+          (c.coReg ? '<div class="reg">Company no. ' + esc(c.coReg) + '</div>' : '') +
+          '<div class="addr">' + addr + '</div>' +
+          (c.coEmail ? '<div class="addr"><div>' + esc(c.coEmail) + '</div></div>' : '') +
+        '</div>' +
+        '<div class="facts">' +
+          '<div class="ref">' + esc(d.number || '—') + '</div>' +
+          '<div class="per">Delivered ' + esc(d.deliveredOn || '') + '</div>' +
+          '<div class="kv">' +
+            kv('Deliver to', ph.trading) +
+            kv('Registered name', ph.contact) +
+            kv('Company no.', ph.brn) +
+            kv('Location', [ph.town, ph.state].filter(Boolean).join(', ')) +
+            kv('Reference', d.reference) +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      (d.status === 'cancelled'
+        ? '<div class="void">This delivery order has been cancelled' +
+          (d.cancelReason ? ': ' + esc(d.cancelReason) : '') +
+          '. The goods it listed are not on the pharmacy&rsquo;s account.</div>'
+        : '') +
+
+      '<table class="dt"><thead><tr><th>Product</th><th>SKU</th>' +
+      '<th class="n">Qty</th><th class="chk">Received</th></tr></thead>' +
+      '<tbody>' + body +
+      '<tr class="tt"><td colspan="2">Total &mdash; ' + rows.length + ' line(s)</td>' +
+      '<td class="n">' + r2(units) + '</td><td></td></tr></tbody></table>' +
+
+      /* The sentence the document exists for. */
+      '<div class="cons"><b>Goods supplied on consignment.</b> Title to the goods listed above ' +
+      'remains with ' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + ' until they are sold by the ' +
+      'receiving pharmacy. They are held at the pharmacy&rsquo;s premises at ' +
+      esc(c.coName || 'CTG4U RETAIL SDN BHD') + '&rsquo;s risk of ownership and are to be ' +
+      'reported on the monthly sold-out return. Unsold goods remain returnable.</div>' +
+
+      (d.note ? '<div class="ft">' + esc(d.note) + '</div>' : '') +
+
+      '<div class="sig">' +
+        '<div>Delivered by<br><span></span><i>Name, date</i></div>' +
+        '<div>Received in good order by ' + esc(ph.trading || '') +
+        '<br><span></span><i>Name, designation, date &amp; company stamp</i></div>' +
+      '</div>' +
+      '</section>';
+  }
+
+  var DO_CSS = [
+    'body{font:12px/1.5 "Public Sans","Segoe UI",Arial,sans-serif;color:#1b2733;margin:0;background:#f4f7f9}',
+    '.do{background:#fff;max-width:760px;margin:0 auto 24px;padding:34px 40px;page-break-after:always}',
+    '.do:last-child{page-break-after:auto}',
+    '.band{display:flex;justify-content:space-between;align-items:center;background:#1b2733;color:#fff;',
+    '  padding:10px 18px;margin:-34px -40px 16px;border-radius:2px}',
+    '.bco{font-weight:800;font-size:14px;letter-spacing:.4px}',
+    '.bti{font-size:12px;opacity:.92;letter-spacing:.5px}',
+    '.head{display:flex;justify-content:space-between;gap:34px;align-items:flex-start}',
+    '.issuer{max-width:46%}',
+    '.co{font-weight:700;font-size:14px}',
+    '.reg{font-size:10.5px;color:#5b6b7c;margin-top:2px}',
+    '.issuer .addr{font-size:10.5px;color:#5b6b7c;margin-top:6px;line-height:1.45}',
+    '.facts{flex:1;max-width:52%}',
+    '.ref{font-size:19px;font-weight:800;letter-spacing:.5px}',
+    '.per{font-size:11px;color:#5b6b7c;margin-top:2px}',
+    '.kv{margin-top:9px;font-size:11px}',
+    '.kv div{display:flex;gap:8px;margin-bottom:2px}',
+    '.kv span{color:#5b6b7c;min-width:104px;flex:none}',
+    '.kv b{font-weight:600;color:#1b2733}',
+    '.void{margin-top:12px;padding:9px 12px;border:1px solid #d64545;color:#a3302f;',
+    '  border-radius:3px;font-size:11px}',
+    '.dt{width:100%;border-collapse:collapse;margin-top:16px;font-size:11.5px}',
+    '.dt th{text-align:left;border-bottom:1.5px solid #1b2733;padding:5px 8px;',
+    '  font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:#5b6b7c}',
+    '.dt td{padding:5px 8px;border-bottom:1px solid #eee}',
+    '.dt .n{text-align:right;font-variant-numeric:tabular-nums;width:70px}',
+    '.dt .sku{color:#5b6b7c;width:120px}',
+    /* a box to tick, because somebody is counting boxes against this page */
+    '.dt .chk{width:78px;border-bottom:1px solid #eee}',
+    '.dt thead .chk{text-align:center}',
+    '.dt tbody .chk{border-left:1px solid #eee;background:#fbfcfd}',
+    '.dt tr.grp td{padding-top:11px;font-weight:700;font-size:10.5px;',
+    '  text-transform:uppercase;letter-spacing:.4px;color:#0077c8;border-bottom:0}',
+    '.dt tr.tt td{border-top:1.5px solid #333;border-bottom:0;font-weight:700;background:#fafafa}',
+    '.cons{margin-top:16px;padding:10px 13px;background:#f4f7f9;border-left:3px solid #1b2733;',
+    '  font-size:10.5px;line-height:1.55;border-radius:2px}',
+    '.ft{margin-top:12px;font-size:10.5px;color:#5b6b7c}',
+    '.sig{display:flex;gap:34px;margin-top:34px;break-inside:avoid;page-break-inside:avoid}',
+    '.sig div{flex:1;font-size:10px;color:#5b6b7c}',
+    '.sig span{display:block;border-top:1px solid #999;margin-top:34px}',
+    '.sig i{display:block;font-style:normal;font-size:9px;color:#8a97a4;margin-top:3px}'
+  ].join('');
+
+  /* One or many delivery orders as a printable document. Many, because a van
+     run drops at six pharmacies and the notes are printed as one job. */
+  function deliveryOrderDoc(list, c) {
+    c = cfg(c);
+    var all = Array.isArray(list) ? list : [list];
+    return '<!doctype html><html><head><meta charset="utf-8"><title>Delivery Order' +
+      (all.length === 1 && all[0] && all[0].number ? ' ' + esc(all[0].number) : 's') +
+      '</title><style>' + DO_CSS + '</style></head><body>' +
+      all.filter(Boolean).map(function (d) { return deliveryOrderHTML(d, c); }).join('') +
+      '</body></html>';
   }
 
   /* ------------------------------------------------------- Xero CSV out */
@@ -1960,6 +2118,7 @@
     componentMovement: componentMovement, stockCrossCheck: stockCrossCheck,
     packageGiveawayLines: packageGiveawayLines,
     productRollup: productRollup, shares: shares,
+    deliveryOrderHTML: deliveryOrderHTML, deliveryOrderDoc: deliveryOrderDoc, DO_CSS: DO_CSS,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
   };

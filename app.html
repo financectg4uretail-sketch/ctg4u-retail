@@ -134,6 +134,7 @@
     <button class="btn sm" id="stockViewOn" onclick="stockView('on')">Stock on hand</button>
     <button class="btn sm ghost" id="stockViewBun" onclick="stockView('bundles')">Bundles</button>
     <button class="btn sm ghost" id="stockViewMov" onclick="stockView('movement')">Movement</button>
+    <button class="btn sm ghost" id="stockViewDel" onclick="stockView('deliveries')">Delivery orders</button>
   </div>
   <input type="file" id="fileBundles" accept=".csv,.xlsx,.xls" hidden>
   <input type="file" id="filePromo" accept=".xlsx,.xls" hidden>
@@ -289,9 +290,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=5bc91fba12"></script>
+<script src="assets/db.js?v=45df69b538"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=c996f764d7"></script>
+<script src="assets/calc.js?v=72095f5e17"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -312,7 +313,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '88bc38520e54';
+  var MINE = 'fa47999151c2';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1917,6 +1918,222 @@ function recompute(raw) {
 }
 
 /* ============================================================= REVIEW */
+/* ------------------------------------------------------- delivery orders */
+
+/* Raising the delivery order is what puts the stock in.
+ *
+ * Not two steps. A delivery is one van, one pharmacy, one signature and eleven
+ * products, and if the document and the stock were recorded separately they
+ * could be recorded differently - or one of them not at all. The pharmacy holds
+ * a signed piece of paper either way, so the ledger has to be the thing that
+ * follows it exactly.
+ */
+var DEL = { rows: [], pharmacy: '', from: '', to: '', draft: null };
+
+function renderDeliveries() {
+  $('#stockHead').innerHTML = '<div class="card"><div class="hint">Loading delivery orders&hellip;</div></div>';
+  $('#stockBody').innerHTML = '';
+  DB.deliveries.list(DEL.pharmacy || null, DEL.from || null, DEL.to || null)
+    .then(function (rows) { DEL.rows = rows || []; drawDeliveries(); }, function (e) {
+      err(e);
+      $('#stockHead').innerHTML = '<div class="card"><div class="note warn">Could not read ' +
+        'delivery orders: ' + esc(e.message || String(e)) + '</div></div>';
+    });
+}
+
+function drawDeliveries() {
+  var rows = DEL.rows;
+  var live = rows.filter(function (r) { return r.status !== 'cancelled'; });
+  var phOpts = ST.master.pharmacies.map(function (p) {
+    return '<option value="' + esc(p.id) + '"' + (DEL.pharmacy === p.id ? ' selected' : '') +
+      '>' + esc(p.trading) + '</option>';
+  }).join('');
+
+  $('#stockHead').innerHTML =
+    '<div class="card"><h2>Delivery orders</h2>' +
+    '<div class="hint">Raising one puts the stock in &mdash; the document and the ledger are ' +
+    'the same write, so what the pharmacy signed for is what the shelf says.</div>' +
+    '<div class="row" style="margin-top:11px;gap:8px;flex-wrap:wrap;align-items:center">' +
+      '<select onchange="DEL.pharmacy=this.value;renderDeliveries()">' +
+        '<option value="">All pharmacies</option>' + phOpts + '</select>' +
+      '<label>From</label><input type="date" value="' + esc(DEL.from) +
+        '" onchange="DEL.from=this.value;renderDeliveries()">' +
+      '<label>To</label><input type="date" value="' + esc(DEL.to) +
+        '" onchange="DEL.to=this.value;renderDeliveries()">' +
+      '<button class="btn sm" onclick="newDelivery()">New delivery order</button>' +
+      (live.length ? '<button class="btn sm ghost" onclick="printDeliveries()">Print all shown</button>' : '') +
+    '</div>' +
+    '<div class="kpis" style="margin-top:12px">' +
+      kpi('Delivery orders', String(live.length)) +
+      kpi('Units delivered', String(CB.r2(live.reduce(function (t, r) { return t + (+r.units); }, 0)))) +
+      kpi('Cancelled', String(rows.length - live.length),
+        (rows.length - live.length) ? 'accent' : '') +
+    '</div></div>';
+
+  if (!rows.length) {
+    $('#stockBody').innerHTML = '<div class="card"><div class="hint">No delivery orders yet. ' +
+      'Raise one when goods go out to a pharmacy &mdash; that is what puts stock on their ' +
+      'shelf in this system.</div></div>';
+    return;
+  }
+
+  $('#stockBody').innerHTML = '<div class="card"><div class="scroll" style="max-height:560px">' +
+    '<table><tr><th>DO number</th><th>Date</th><th>Pharmacy</th><th>Reference</th>' +
+    '<th class="num">Lines</th><th class="num">Units</th><th></th></tr>' +
+    rows.map(function (r) {
+      var dead = r.status === 'cancelled';
+      return '<tr class="' + (dead ? 'mut' : '') + '">' +
+        '<td><b>' + esc(r.do_number) + '</b>' + (dead ? ' <span class="mut">cancelled</span>' : '') + '</td>' +
+        '<td>' + esc(r.delivered_on) + '</td>' +
+        '<td>' + esc(r.pharmacy_trading) + '</td>' +
+        '<td>' + esc(r.reference || '') + '</td>' +
+        '<td class="num">' + r.lines + '</td>' +
+        '<td class="num">' + CB.r2(+r.units) + '</td>' +
+        '<td><button class="btn sm ghost" onclick="printDelivery(\'' + esc(r.id) + '\')">PDF</button>' +
+        (dead ? '' : ' <button class="btn sm ghost" onclick="cancelDelivery(\'' + esc(r.id) +
+          '\',\'' + esc(r.do_number) + '\')">Cancel</button>') +
+        '</td></tr>';
+    }).join('') + '</table></div></div>';
+}
+
+/* ---- printing ---- */
+
+function openDoc(html, what) {
+  var w = window.open('', '_blank');
+  if (!w) { toast('Pop-up blocked — allow pop-ups for this page, then try again', 'bad'); return; }
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function () { w.focus(); w.print(); }, 350);
+}
+
+function printDelivery(id) {
+  DB.deliveries.get(id).then(function (d) {
+    if (!d) { toast('That delivery order is no longer here', 'warn'); return; }
+    openDoc(CB.deliveryOrderDoc(d, ST.cfg));
+  }, err);
+}
+
+/* A van run drops at several pharmacies and the notes are printed as one job,
+   so every note in view comes out in one document rather than one click each. */
+function printDeliveries() {
+  var live = DEL.rows.filter(function (r) { return r.status !== 'cancelled'; });
+  if (!live.length) { toast('Nothing to print', 'warn'); return; }
+  toast('Building ' + live.length + ' delivery order(s)...');
+  Promise.all(live.map(function (r) { return DB.deliveries.get(r.id); }))
+    .then(function (docs) {
+      openDoc(CB.deliveryOrderDoc(docs.filter(Boolean), ST.cfg));
+    }, err);
+}
+
+function cancelDelivery(id, number) {
+  if (!requireWrite()) return;
+  var why = prompt('Cancel ' + number + '?\n\nThe stock it delivered comes back out. The ' +
+    'document and its number stay, because the number is already on paper at the pharmacy.\n\n' +
+    'Reason:');
+  if (why === null) return;
+  DB.deliveries.cancel(id, why).then(function (res) {
+    toast(res.already ? 'That one was already cancelled'
+      : number + ' cancelled — ' + res.removed + ' stock line(s) taken back out', 'ok');
+    return DB.audit('delivery_cancelled', { id: id, number: number, reason: why });
+  }).then(renderDeliveries, err);
+}
+
+/* ---- raising one ---- */
+
+function newDelivery() {
+  if (!requireWrite()) return;
+  var prods = (ST.master.products || []).filter(function (p) { return !p.isBundle; });
+  if (!prods.length) {
+    toast('No single SKUs yet — import the bundles first, that is what creates them', 'warn');
+    return;
+  }
+  DEL.draft = { pharmacy: DEL.pharmacy || '', on: CB.monthEnd(ST.cfg.period),
+                reference: '', note: '', qty: {} };
+  drawDeliveryDraft();
+}
+
+function drawDeliveryDraft() {
+  var d = DEL.draft;
+  var phOpts = ST.master.pharmacies.map(function (p) {
+    return '<option value="' + esc(p.id) + '"' + (d.pharmacy === p.id ? ' selected' : '') +
+      '>' + esc(p.trading) + '</option>';
+  }).join('');
+
+  /* Grouped by brand owner, because that is how a van is loaded and how the
+     person keying it reads their own paperwork. */
+  var byOwner = {}, order = [];
+  (ST.master.products || []).filter(function (p) { return !p.isBundle; }).forEach(function (p) {
+    var k = p.project || '(no brand owner)';
+    if (!byOwner[k]) { byOwner[k] = []; order.push(k); }
+    byOwner[k].push(p);
+  });
+
+  $('#stockHead').innerHTML = '';
+  $('#stockBody').innerHTML =
+    '<div class="card"><h2>New delivery order</h2>' +
+    '<div class="hint">Enter what physically went out. Saving issues the DO number and puts the ' +
+    'stock on that pharmacy&rsquo;s shelf in one step.</div>' +
+    '<div class="row" style="margin-top:11px;gap:8px;flex-wrap:wrap;align-items:center">' +
+      '<label>Pharmacy</label>' +
+      '<select id="doPharm"><option value="">Choose&hellip;</option>' + phOpts + '</select>' +
+      '<label>Delivered on</label><input type="date" id="doDate" value="' + esc(d.on) + '">' +
+      '<label>Reference</label><input id="doRef" placeholder="van run, PO, note" style="width:180px">' +
+    '</div></div>' +
+
+    '<div class="card"><div class="scroll" style="max-height:460px"><table>' +
+    '<tr><th>Product</th><th>SKU</th><th class="num" style="width:120px">Qty out</th></tr>' +
+    order.map(function (k) {
+      return '<tr class="grp"><td colspan="3"><b>' + esc(k) + '</b></td></tr>' +
+        byOwner[k].map(function (p) {
+          return '<tr><td>' + esc(p.name) + '</td><td class="mut">' + esc(p.sku || '') + '</td>' +
+            '<td class="num"><input type="number" step="1" min="0" style="width:100px;text-align:right" ' +
+            'data-do="' + esc(p.id) + '"></td></tr>';
+        }).join('');
+    }).join('') + '</table></div>' +
+    '<div class="row" style="margin-top:11px;gap:8px">' +
+      '<button class="btn" onclick="saveDelivery()">Issue delivery order</button>' +
+      '<button class="btn ghost" onclick="renderDeliveries()">Cancel</button>' +
+    '</div>' +
+    '<div class="hint" style="margin-top:8px">Lines left blank are not on the order. ' +
+    'A delivery order with nothing on it is refused.</div></div>';
+}
+
+function saveDelivery() {
+  if (!requireWrite()) return;
+  var pharmacy = ($('#doPharm') || {}).value || '';
+  var on = ($('#doDate') || {}).value || '';
+  var ref = ($('#doRef') || {}).value || '';
+  if (!pharmacy) { toast('Which pharmacy is this going to?', 'bad'); return; }
+  if (!on) { toast('A delivery needs the date it happened', 'bad'); return; }
+
+  var rows = [];
+  Array.prototype.forEach.call($('#stockBody').querySelectorAll('input[data-do]'), function (i) {
+    var q = CB.num(i.value);
+    if (q > 0) rows.push({ product_id: i.getAttribute('data-do'), qty: q });
+  });
+  if (!rows.length) { toast('Nothing on this delivery order', 'bad'); return; }
+
+  var ph = ST.master.pharmacies.filter(function (p) { return p.id === pharmacy; })[0] || {};
+  var units = rows.reduce(function (t, r) { return t + r.qty; }, 0);
+  if (!confirm('Issue a delivery order to ' + (ph.trading || '') + '?\n\n' +
+      rows.length + ' product line(s), ' + CB.r2(units) + ' unit(s), dated ' + on + '.\n\n' +
+      'This puts the stock on their shelf and issues a DO number that cannot be reused.')) return;
+
+  DB.deliveries.create(pharmacy, on, ST.cfg.deliveryOrderPrefix || 'CTGDO', ref, '', rows)
+    .then(function (res) {
+      toast('Delivery order ' + res.number + ' issued — ' + res.lines + ' line(s) in stock', 'ok');
+      return DB.audit('delivery_issued',
+        { number: res.number, pharmacy: pharmacy, lines: res.lines })
+        .then(function () { return res; });
+    })
+    .then(function (res) {
+      DEL.draft = null;
+      /* Straight to the paper - the van is waiting for it. */
+      printDelivery(res.id);
+      renderDeliveries();
+    }, err);
+}
+
 /* ------------------------------------------- the monthly promotion workbook */
 
 /* One sheet per brand, one row per package, a column per product it contains.
@@ -2521,8 +2738,10 @@ function stockView(v) {
   $('#stockViewOn').className  = 'btn sm' + (v === 'on' ? '' : ' ghost');
   $('#stockViewBun').className = 'btn sm' + (v === 'bundles' ? '' : ' ghost');
   $('#stockViewMov').className = 'btn sm' + (v === 'movement' ? '' : ' ghost');
+  $('#stockViewDel').className = 'btn sm' + (v === 'deliveries' ? '' : ' ghost');
   if (v === 'bundles') { $('#stockHead').innerHTML = ''; renderBundles(); }
   else if (v === 'movement') renderMovement();
+  else if (v === 'deliveries') renderDeliveries();
   else renderStock();
 }
 
@@ -3794,6 +4013,7 @@ var CFG_FIELDS = {
   num: [
     ['pharmacyInvPrefix', 'Pharmacy invoice prefix', 'e.g. CTG4U2607-0001', 'text'],
     ['serviceInvPrefix', 'Fee invoice prefix', 'Billed to the brand owner', 'text'],
+    ['deliveryOrderPrefix', 'Delivery order prefix', 'Numbers the delivery notes', 'text'],
     ['payoutBillPrefix', 'Payout bill prefix', 'Owed to the brand owner', 'text'],
     ['startNumber', 'Start running number at', 'Used only before any numbers have been reserved', 'number'],
     ['invoiceDate', 'Document date (blank = month end)', 'Applies to all three document types', 'date']

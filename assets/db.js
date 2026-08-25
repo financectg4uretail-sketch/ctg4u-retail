@@ -525,6 +525,34 @@
       }
     },
 
+    /* -------------------------------------------------- delivery orders */
+
+    /* Raising the delivery order is what puts the stock in. One write, so the
+     * paper the pharmacy signed and the ledger cannot disagree. */
+    deliveries: {
+      list: function (pharmacyId, from, to) {
+        return sb.rpc('delivery_list', {
+          p_pharmacy: pharmacyId || null, p_from: from || null, p_to: to || null
+        }).then(function (r) { fail('Read delivery orders', r.error); return r.data || []; });
+      },
+      get: function (id) {
+        return sb.rpc('delivery_get', { p_id: id })
+          .then(function (r) { fail('Read delivery order', r.error); return r.data || null; });
+      },
+      create: function (pharmacyId, on, prefix, reference, note, rows) {
+        return sb.rpc('delivery_create', {
+          p_pharmacy: pharmacyId, p_on: on, p_prefix: prefix || 'CTGDO',
+          p_reference: reference || null, p_note: note || null, p_rows: rows || []
+        }).then(function (r) { fail('Raise delivery order', r.error); return r.data || {}; });
+      },
+      /* Cancelling takes the stock back out but keeps the document - the
+         number is already on paper at the pharmacy. */
+      cancel: function (id, reason) {
+        return sb.rpc('delivery_cancel', { p_id: id, p_reason: reason || null })
+          .then(function (r) { fail('Cancel delivery order', r.error); return r.data || {}; });
+      }
+    },
+
     /* ----------------------------------------------------------- bundles */
 
     /* What a package contains. Used to move stock wherever a sheet does not
