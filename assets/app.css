@@ -31,7 +31,7 @@
   /* type */
   --tx:#1b2733;
   --tx2:#5b6b7c;
-  --tx3:#8494a5;
+  --tx3:#67707c;           /* Xero's neutral grey, darkened to clear AA at 11px */
 
   /* action + brand */
   --blue:#0077c8;
@@ -39,7 +39,7 @@
   --blue-dkr:#00507f;
   --blue-tint:#e8f3fb;
   --blue-ring:#0077c840;
-  --cyan:#13b5ea;
+  --cyan:#06b3e8;          /* Xero's published brand blue */
 
   /* semantics */
   --ok:#00a99d;      --ok-tx:#04796f;   --ok-bg:#00a99d14;
@@ -54,7 +54,6 @@
   --r-lg:6px;
   --h:36px;                    /* the single control height everything sits on */
   --h-sm:28px;
-  --shadow:0 1px 2px #1b273312;
   --shadow-lg:0 6px 20px -6px #1b273333;
   --lift:0 1px 0 #1b27330f;    /* the hairline under a button that gives it a body */
 }
@@ -165,9 +164,8 @@ header{background:var(--surface);border-bottom:1px solid var(--line);padding:22p
   display:flex;align-items:center;gap:20px;flex-wrap:wrap;
 }
 .hd-t{min-width:0;flex:1 1 380px}
-.hd h1{font-size:25px;line-height:1.18;font-weight:700;letter-spacing:-.018em}
+.hd h1{font-size:26px;line-height:1.14;font-weight:700;letter-spacing:-.023em}
 .hd .sub{color:var(--tx2);font-size:13px;margin-top:6px;max-width:78ch;line-height:1.55}
-.hd .actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .spacer{flex:1}
 
 .periodbox{
@@ -191,10 +189,10 @@ header{background:var(--surface);border-bottom:1px solid var(--line);padding:22p
 @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
 .card{
+  --cardpad:22px;                     /* the card's own inset, see .card>h2 */
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
-  padding:20px 22px;margin-bottom:16px;
+  padding:20px var(--cardpad);margin-bottom:16px;
 }
-.card>h2{font-size:16px;margin-bottom:4px;font-weight:600}
 .card>.hint{color:var(--tx2);font-size:12.5px;margin-bottom:16px;max-width:84ch;line-height:1.6}
 
 /* ===========================================================================
@@ -228,13 +226,6 @@ button.btn.danger{background:var(--surface);border-color:#e3b4b4;color:var(--bad
 button.btn.danger:hover{background:var(--bad-bg);border-color:var(--bad);color:var(--bad-tx)}
 button.btn.danger:active{background:#f6dcdc}
 
-/* link: an action that reads as text, for tertiary choices in a row of controls */
-button.btn.link{
-  background:transparent;border-color:transparent;color:var(--blue);
-  font-weight:500;padding:0 6px;box-shadow:none;
-}
-button.btn.link:hover{background:var(--blue-tint);color:var(--blue-dk)}
-
 button.btn.sm{height:var(--h-sm);padding:0 11px;font-size:12.5px;gap:5px}
 button.btn.wide{width:100%}
 
@@ -267,7 +258,6 @@ select:focus,input:focus,textarea:focus{
 }
 input[type=number],input[type=date],input[type=month]{font-variant-numeric:tabular-nums}
 input::placeholder{color:var(--tx3)}
-input.tiny{width:92px}
 input:disabled,select:disabled{background:var(--surface-2);color:var(--tx3);cursor:not-allowed}
 
 /* a select should not look like a text box it is not */
@@ -314,12 +304,16 @@ input[type=checkbox]{
 
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 th{
-  text-align:left;color:var(--tx2);font:600 11px var(--sans);
-  text-transform:uppercase;letter-spacing:.05em;
-  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
-  position:sticky;top:0;z-index:2;background:var(--band);
+  text-align:left;color:var(--tx2);font:600 10.5px var(--sans);
+  text-transform:uppercase;letter-spacing:.07em;
+  padding:10px 14px;border-bottom:1px solid var(--line-strong);white-space:nowrap;
+  background:var(--band);
 }
-td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+/* Sticky only where there is something to stick to: a th at top:0 with no
+   scrolling ancestor pins itself to the window instead, and rides down the
+   page over whatever follows. */
+.scroll th{position:sticky;top:0;z-index:2}
+td{padding:11px 14px;border-bottom:1px solid var(--rule);vertical-align:top}
 tbody tr:last-child td,table tr:last-child td{border-bottom:0}
 tr:hover td{background:var(--surface-2)}
 /* Xero prints amounts in the text face, tabular and right-aligned */
@@ -338,7 +332,7 @@ th.num{text-align:right}
   max-height:470px;max-width:1400px;overflow:auto;
   border:1px solid var(--line);border-radius:var(--r);background:var(--surface);
 }
-.card>table,.card>.tblwrap>table{max-width:1400px}
+.card>table{max-width:1400px}
 .scroll::-webkit-scrollbar{width:11px;height:11px}
 .scroll::-webkit-scrollbar-thumb{background:#c9d4dd;border-radius:8px;border:3px solid var(--surface)}
 .scroll::-webkit-scrollbar-thumb:hover{background:#adbcc9}
@@ -397,7 +391,6 @@ th.num{text-align:right}
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}
-.g4{grid-template-columns:repeat(auto-fit,minmax(206px,1fr))}
 
 /* ------------------------------------------------------------ league table */
 
@@ -405,11 +398,6 @@ th.num{text-align:right}
    "who is biggest", and the eye compares two lengths far better than it compares
    two percentages. The percentage of total is still printed, for the answer the
    bar cannot give. */
-.league td{vertical-align:top}
-.league .rank{
-  font:600 12px var(--num);color:var(--tx3);width:26px;
-  font-variant-numeric:tabular-nums;padding-top:12px;
-}
 .bar{
   margin-top:7px;height:4px;border-radius:3px;background:var(--rule);
   overflow:hidden;display:block;
@@ -419,13 +407,19 @@ th.num{text-align:right}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px 14px}
 .kpi .l{font:600 11px var(--sans);color:var(--tx3);text-transform:uppercase;letter-spacing:.06em}
 .kpi .v{
-  font:600 23px/1.15 var(--num);font-variant-numeric:tabular-nums;
-  margin-top:5px;letter-spacing:-.01em;color:var(--tx);
+  font:600 24px/1.12 var(--num);font-variant-numeric:tabular-nums;
+  margin-top:6px;letter-spacing:-.018em;color:var(--tx);
 }
 .kpi.accent{border-color:#0077c84d;background:var(--blue-tint)}
 .kpi.accent .v{color:var(--blue-dk)}
-/* a settings field is a kpi with a control in it */
+/* A settings field is a kpi with a control in it. Four of these sit in a row and
+   one caption in four wraps to two lines - so the card is a column with the
+   control pinned to the bottom, and the row keeps one control height. */
+label.kpi,.kpi:has(input),.kpi:has(select){
+  display:flex;flex-direction:column;justify-content:space-between;
+}
 .kpi input,.kpi select{margin-top:2px}
+.kpi .l{min-height:2.6em}
 label.kpi{cursor:pointer}
 label.kpi:hover{border-color:var(--line-strong)}
 
@@ -441,7 +435,6 @@ label.kpi:hover{border-color:var(--line-strong)}
 .recon tr.tot td:first-child{font-size:13px;text-transform:uppercase;letter-spacing:.04em}
 .recon .neg{color:var(--bad)}
 
-.stack{display:flex;flex-direction:column;gap:2px}
 .mut{color:var(--tx3);font-size:11.5px}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.94em}
 
@@ -540,9 +533,7 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
   .hd{gap:14px}
   .hd h1{font-size:21px}
   .hd .sub{font-size:12.5px}
-  .card{padding:16px}
-  .card>h2{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
-  .cardfoot{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
+  .card{--cardpad:16px;padding-top:16px;padding-bottom:16px}
   .kpi .v{font-size:20px}
   button.btn{padding:0 13px}
   .steps{padding:14px 4px}
@@ -565,18 +556,13 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 
 /* a titled band, so a panel announces itself the way a Xero panel does */
 .card>h2{
-  font-size:15px;font-weight:600;margin:-2px -18px 14px;padding:0 18px 12px;
+  font-size:14.5px;font-weight:600;letter-spacing:-.008em;
+  /* the band spans the card, so it gives back exactly what the card pads -
+     one number, which is why it cannot go out of step again */
+  margin:-2px calc(var(--cardpad) * -1) 14px;padding:0 var(--cardpad) 13px;
   border-bottom:1px solid var(--rule);
 }
 .card>h2+.hint{margin-top:-6px}
-
-/* card footer: the actions belong to the panel, not to the page */
-.cardfoot{
-  margin:16px -18px -16px;padding:13px 18px;border-top:1px solid var(--rule);
-  background:var(--surface-2);border-radius:0 0 var(--r) var(--r);
-  display:flex;align-items:center;gap:9px;flex-wrap:wrap;
-}
-.cardfoot .mut{margin-left:auto}
 
 /* ------------------------------------------------- business-overview cards */
 
@@ -607,8 +593,8 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 .figs>div{flex:1;padding-right:18px}
 .figs>div+div{border-left:1px solid var(--rule);padding-left:18px;padding-right:0}
 .fig{
-  font:600 26px/1.15 var(--sans);color:var(--tx);
-  font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+  font:600 27px/1.12 var(--sans);color:var(--tx);
+  font-variant-numeric:tabular-nums;letter-spacing:-.024em;
 }
 .fig.sm{font-size:20px}
 .figcap{color:var(--blue);font-size:12.5px;margin-top:5px}
@@ -633,41 +619,18 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 
 /* ------------------------------------------------------------------ the map */
 
-/* Malaysia is about three times as wide as it is tall once Borneo is included,
-   so the map reads as a band across the top of the dashboard rather than a
-   square panel. Full width is what makes that band legible. */
-.mapwrap{width:100%;overflow:hidden;border-radius:var(--r);background:var(--surface-2)}
-.mymap{display:block;width:100%;height:auto}
-.mymap .spot{
-  fill:var(--blue-dk);fill-opacity:.62;stroke:#fff;stroke-width:1.1;
-  transition:fill-opacity .14s;cursor:default;
-}
-.mymap .spot:hover{fill-opacity:.95}
-/* the leader gets a ring rather than a different colour: it is the same kind of
-   thing as every other dot, just the largest one */
-.mymap .spot.top{fill:var(--blue-dk);fill-opacity:.95;stroke:var(--cyan);stroke-width:2.4}
-
-/* The winning region. Amber rather than a deeper blue, because the blue is
-   already carrying the amount and a "darkest blue plus" reads as more sales
-   rather than as the answer to a different question. */
-.mymap .st.lead{filter:drop-shadow(0 0 2px rgba(200,121,26,.35))}
-.mymap .leadline{stroke:#c8791a;stroke-opacity:.85;stroke-linecap:round}
-.mymap .leaddot{fill:#c8791a}
-.mymap .leadlab rect{fill:#fffaf2;stroke:#e0b27a}
-.mymap .leadlab .l1{fill:#8a520d;font-weight:700;letter-spacing:.03em}
-/* #a2691f read as 4.42:1 on the label ground, which is under AA for text this
-   size - it is a figure the operator is meant to read, not a decoration. */
-.mymap .leadlab .l2{fill:#8f5a15;font-variant-numeric:tabular-nums}
-
 /* Reading the shading off a bar, instead of hovering every state to find out
    what its colour was worth. */
 .mapscale{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"cap bar" ". tks";
   gap:6px 12px;align-items:center;margin-top:14px;max-width:520px}
 .mapscale .cap{grid-area:cap;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tx3)}
-.mapscale .bar{grid-area:bar;height:9px;border-radius:var(--r);border:1px solid var(--ln)}
+.mapscale .bar{grid-area:bar;height:9px;border-radius:var(--r);border:1px solid var(--line)}
 .mapscale .tk{grid-area:tks;font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;
   justify-self:end}
-.mapscale .tk:first-of-type{justify-self:start}
+/* The zero tick is the one straight after the bar. :first-of-type counted
+   SPANS, and .cap is a span too, so it matched the caption and no tick ever
+   got start-aligned - the two end labels piled up on the right. */
+.mapscale .bar+.tk{justify-self:start}
 .mapscale .tk.mid{justify-self:center}
 .mapscale .tk,.mapscale .tk.mid{grid-row:2;grid-column:2}
 
