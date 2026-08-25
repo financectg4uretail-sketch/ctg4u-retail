@@ -508,6 +508,14 @@
         return sb.rpc('stock_unpost_run', { p_run_id: runId })
           .then(function (r) { fail('Take back stock for this run', r.error); return r.data; });
       },
+      /* opening + in - out = closing for a window, both ends derived from the
+         same rows so the report cannot disagree with itself */
+      movement: function (from, to, pharmacyId, brandOwnerId) {
+        return sb.rpc('stock_movement', {
+          p_from: from, p_to: to,
+          p_pharmacy: pharmacyId || null, p_brand_owner: brandOwnerId || null
+        }).then(function (r) { fail('Read stock movement', r.error); return r.data || []; });
+      },
       history: function (pharmacyId, productId) {
         return sb.from('stock_movements')
           .select('moved_on,qty,kind,period,note,run_id')
@@ -535,6 +543,13 @@
       /* Creates whatever the file names and does not exist yet, and reports it
          rather than doing it quietly - a typo becoming a new product is how one
          master list turns into two of everything. */
+      /* The monthly promotion workbook is one sheet per brand, twenty-seven at
+         once. Selecting a brand owner twenty-seven times is not a workflow, so
+         each row carries the owner it belongs to. */
+      importMany: function (rows) {
+        return sb.rpc('bundle_import_many', { p_rows: rows || [] })
+          .then(function (r) { fail('Import promotion workbook', r.error); return r.data || {}; });
+      },
       import: function (brandOwnerId, rows) {
         return sb.rpc('bundle_import', { p_brand_owner: brandOwnerId, p_rows: rows || [] })
           .then(function (r) { fail('Import bundles', r.error); return r.data || {}; });

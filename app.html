@@ -133,8 +133,10 @@
   <div class="row" style="gap:8px;margin-bottom:12px">
     <button class="btn sm" id="stockViewOn" onclick="stockView('on')">Stock on hand</button>
     <button class="btn sm ghost" id="stockViewBun" onclick="stockView('bundles')">Bundles</button>
+    <button class="btn sm ghost" id="stockViewMov" onclick="stockView('movement')">Movement</button>
   </div>
   <input type="file" id="fileBundles" accept=".csv,.xlsx,.xls" hidden>
+  <input type="file" id="filePromo" accept=".xlsx,.xls" hidden>
   <div id="stockHead"></div>
   <div id="stockBody"></div>
 </section>
@@ -287,7 +289,7 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=8990d6be89"></script>
+<script src="assets/db.js?v=5bc91fba12"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
 <script src="assets/calc.js?v=c996f764d7"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
@@ -310,7 +312,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '3f42aa4abce2';
+  var MINE = '88bc38520e54';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1915,6 +1917,330 @@ function recompute(raw) {
 }
 
 /* ============================================================= REVIEW */
+/* ------------------------------------------- the monthly promotion workbook */
+
+/* One sheet per brand, one row per package, a column per product it contains.
+ * Exactly the shape of a pharmacy's package sheet, minus the dates - which is
+ * not a coincidence: it is the same fact written from the other end.
+ *
+ * Three things this file does that a naive read would get wrong, in order of
+ * how much damage each would do:
+ *
+ *   1. Every sheet carries a "------outdated pack" divider, and everything
+ *      below it is a superseded recipe. Reading past it overwrites this
+ *      month's contents with last month's.
+ *   2. Two sheets are not bundle data at all. PROMO PIC is an image index and
+ *      DISCOUNT VOUCHER is a page of terms and conditions whose "quantities"
+ *      are sentences. Importing them would create products called things like
+ *      "1. Voucher cannot be transferable".
+ *   3. Roughly half the sheets are brands this business does not consign. They
+ *      are reported and skipped, never guessed into a brand owner.
+ */
+var PROMO_OUTDATED = /-{3,}\s*outdated/i;
+
+/* A row is a bundle only if it has a name, a real price, and at least one
+ * numeric quantity. That single rule is what separates the real sheets from
+ * the two that are not - no sheet name list to maintain. */
+function readPromoSheet(rows) {
+  if (!rows || !rows.length) return null;
+  var hdr = (rows[0] || []).map(function (c) { return String(c == null ? '' : c).trim(); });
+  var comps = [];
+  hdr.forEach(function (h, i) { if (i >= 2 && h) comps.push({ at: i, name: h }); });
+  if (!comps.length) return null;
+
+  var out = [], past = false;
+  for (var k = 1; k < rows.length; k++) {
+    var row = rows[k] || [];
+    if (PROMO_OUTDATED.test(row.map(function (c) { return String(c == null ? '' : c); }).join(' '))) {
+      past = true; continue;
+    }
+    if (past) continue;
+    var name = String(row[0] == null ? '' : row[0]).trim();
+    if (!name) continue;
+    var price = CB.num(row[1]);
+    if (!(price > 0)) continue;                 // no price, not a package
+    var parts = [];
+    comps.forEach(function (c) {
+      var q = CB.num(row[c.at]);
+      if (q > 0) parts.push({ sku: c.name, qty: q });
+    });
+    if (parts.length) out.push({ pkg: name, price: CB.r2(price), parts: parts });
+  }
+  return out.length ? out : null;
+}
+
+/* Match a sheet to a brand owner on the brand name, which is what follows the
+   last dash in the brand owner's name. Nothing fuzzy: a sheet that does not
+   match exactly is listed for the operator rather than attached to whichever
+   brand looked closest. Getting this wrong would put one brand's recipes under
+   another brand's name, and the stock would follow. */
+function promoOwnerFor(sheetName) {
+  var want = CB.normKey(sheetName).replace(/\s/g, '');
+  var hit = null;
+  (ST.master.projects || []).forEach(function (p) {
+    var brand = String(p.name || '').split('-').pop();
+    if (CB.normKey(brand).replace(/\s/g, '') === want) hit = p;
+  });
+  return hit;
+}
+
+function importPromoPick() { $('#filePromo').click(); }
+
+$('#filePromo').onchange = function (e) {
+  var f = e.target.files[0]; if (!f || !requireWrite()) return;
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var wb = XLSX.read(new Uint8Array(r.result), { type: 'array' });
+      var rows = [], matched = [], unmatched = [], notBundles = [];
+
+      wb.SheetNames.forEach(function (name) {
+        var aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '' });
+        var pkgs = readPromoSheet(aoa);
+        if (!pkgs) { notBundles.push(name); return; }
+        var owner = promoOwnerFor(name);
+        if (!owner) { unmatched.push({ sheet: name, bundles: pkgs.length }); return; }
+        var skus = {};
+        pkgs.forEach(function (p) {
+          p.parts.forEach(function (c) {
+            skus[c.sku] = 1;
+            rows.push({
+              owner_code: owner.code, bundle: p.pkg, bundle_sku: '',
+              component: c.sku, component_sku: '', qty: c.qty
+            });
+          });
+        });
+        matched.push({ sheet: name, owner: owner, bundles: pkgs.length,
+                       skus: Object.keys(skus).length });
+      });
+
+      if (!rows.length) {
+        toast('Nothing to import — no sheet matched a brand owner', 'bad');
+        return;
+      }
+      PROMO = { rows: rows, matched: matched, unmatched: unmatched, notBundles: notBundles,
+                file: f.name };
+      drawPromoPreview();
+    } catch (e2) { toast('Could not read that file: ' + e2.message, 'bad'); }
+  };
+  r.readAsArrayBuffer(f);
+  e.target.value = '';
+};
+
+var PROMO = null;
+
+/* Nothing is written until the operator has seen what would be. An import that
+   replaces one hundred and eighty recipes across twenty-seven brands is not
+   something to discover afterwards. */
+function drawPromoPreview() {
+  var P = PROMO;
+  var bundles = P.matched.reduce(function (t, m) { return t + m.bundles; }, 0);
+
+  var h = '<div class="card"><h2>Import from ' + esc(P.file) + '</h2>' +
+    '<div class="hint">Nothing has been written yet. This is what the file says.</div>' +
+    '<div class="kpis" style="margin-top:12px">' +
+      kpi('Brands matched', String(P.matched.length)) +
+      kpi('Bundles', String(bundles)) +
+      kpi('Component rows', String(P.rows.length)) +
+      kpi('Sheets skipped', String(P.unmatched.length + P.notBundles.length),
+        (P.unmatched.length ? 'accent' : '')) +
+    '</div>' +
+    '<div class="row" style="margin-top:13px;gap:8px">' +
+      '<button class="btn" onclick="runPromoImport()">Import these ' + bundles + ' bundles</button>' +
+      '<button class="btn ghost" onclick="renderBundles()">Cancel</button>' +
+    '</div></div>';
+
+  h += '<div class="card"><h2>Will be imported</h2><div class="scroll" style="max-height:340px">' +
+    '<table><tr><th>Sheet</th><th>Brand owner</th><th class="num">Bundles</th>' +
+    '<th class="num">Single SKUs</th></tr>' +
+    P.matched.map(function (m) {
+      return '<tr><td>' + esc(m.sheet) + '</td><td>' + esc(m.owner.name) + '</td>' +
+        '<td class="num">' + m.bundles + '</td><td class="num">' + m.skus + '</td></tr>';
+    }).join('') + '</table></div>' +
+    '<div class="hint" style="margin-top:8px">Each of these bundles has its recipe <b>replaced</b> ' +
+    'by what the file says. Bundles not named in the file are left alone.</div></div>';
+
+  if (P.unmatched.length) {
+    h += '<div class="note warn"><b>' + P.unmatched.length + ' sheet(s) have no brand owner and ' +
+      'will be skipped.</b> If any of these are consigned, add the brand owner on the Contacts ' +
+      'tab first &mdash; nothing here is guessed into the nearest matching brand.' +
+      '<div class="scroll" style="max-height:180px;margin-top:9px"><table>' +
+      '<tr><th>Sheet</th><th class="num">Bundles it would have brought</th></tr>' +
+      P.unmatched.map(function (u) {
+        return '<tr><td>' + esc(u.sheet) + '</td><td class="num">' + u.bundles + '</td></tr>';
+      }).join('') + '</table></div></div>';
+  }
+  if (P.notBundles.length) {
+    h += '<div class="note"><b>' + P.notBundles.length + ' sheet(s) carry no package rows</b> ' +
+      'and are not bundle data: ' + P.notBundles.map(esc).join(', ') + '. ' +
+      'A sheet counts only where a row has a name, a price and a numeric quantity.</div>';
+  }
+  $('#stockBody').innerHTML = h;
+  $('#stockHead').innerHTML = '';
+}
+
+function runPromoImport() {
+  if (!requireWrite() || !PROMO) return;
+  var P = PROMO;
+  toast('Importing ' + P.rows.length + ' component row(s)...');
+  DB.bundles.importMany(P.rows).then(function (res) {
+    var made = res.created || [];
+    toast(res.rows + ' row(s) across ' + (res.bundles || 0) + ' bundle(s) imported', 'ok');
+    if ((res.unknownOwners || []).length) {
+      toast('Unknown brand owner code(s): ' + res.unknownOwners.join(', '), 'bad');
+    }
+    if (made.length) {
+      alert('Created ' + made.length + ' record(s) that were not in the master yet:\n\n' +
+        made.slice(0, 40).join('\n') +
+        (made.length > 40 ? '\n\n...and ' + (made.length - 40) + ' more' : '') +
+        '\n\nIf any of these is a spelling of something that already exists, fix it on the ' +
+        'Contacts tab — otherwise you now have two of it.');
+    }
+    return DB.audit('promo_bundles_imported',
+      { file: P.file, rows: res.rows, bundles: res.bundles, created: made.length });
+  }).then(refreshMaster).then(function () {
+    PROMO = null;
+    renderBundles();
+  }, err);
+}
+
+/* ------------------------------------------------------- movement report */
+
+/* opening + in - out +/- adjustments = closing, for a chosen window.
+ *
+ * The lifetime view answers "what is on the shelf"; this answers "what happened
+ * this month", which is the form that can be handed to a brand owner or an
+ * auditor, because both ends are derived from the same rows and therefore
+ * cannot disagree with each other. */
+var MOVE = { rows: [], from: '', to: '', pharmacy: '', owner: '' };
+
+function renderMovement() {
+  if (!MOVE.from) MOVE.from = CB.monthStart(ST.cfg.period);
+  if (!MOVE.to) MOVE.to = CB.monthEnd(ST.cfg.period);
+  $('#stockHead').innerHTML = '<div class="card"><div class="hint">Loading movement&hellip;</div></div>';
+  $('#stockBody').innerHTML = '';
+
+  DB.stock.movement(MOVE.from, MOVE.to, MOVE.pharmacy || null, MOVE.owner || null)
+    .then(function (rows) { MOVE.rows = rows || []; drawMovement(); }, function (e) {
+      err(e);
+      $('#stockHead').innerHTML = '<div class="card"><div class="note warn">Could not read the ' +
+        'movement report: ' + esc(e.message || String(e)) + '</div></div>';
+    });
+}
+
+function drawMovement() {
+  var rows = MOVE.rows;
+  var sum = function (k) { return rows.reduce(function (t, r) { return t + (+r[k]); }, 0); };
+
+  var phOpts = ST.master.pharmacies.map(function (p) {
+    return '<option value="' + esc(p.id) + '"' + (MOVE.pharmacy === p.id ? ' selected' : '') +
+      '>' + esc(p.trading) + '</option>';
+  }).join('');
+  var boOpts = ST.master.projects.map(function (b) {
+    return '<option value="' + esc(b.id) + '"' + (MOVE.owner === b.id ? ' selected' : '') +
+      '>' + esc(b.name) + '</option>';
+  }).join('');
+
+  $('#stockHead').innerHTML =
+    '<div class="card"><h2>Stock movement</h2>' +
+    '<div class="hint">Opening + In &minus; Out &plusmn; Adjustments = Closing, for the window ' +
+    'below. Both ends are worked out from the same movements, so the report cannot disagree with ' +
+    'itself.</div>' +
+    '<div class="row" style="margin-top:11px;gap:8px;flex-wrap:wrap;align-items:center">' +
+      '<label>From</label><input type="date" value="' + esc(MOVE.from) +
+        '" onchange="MOVE.from=this.value;renderMovement()">' +
+      '<label>To</label><input type="date" value="' + esc(MOVE.to) +
+        '" onchange="MOVE.to=this.value;renderMovement()">' +
+      '<select onchange="MOVE.pharmacy=this.value;renderMovement()">' +
+        '<option value="">All pharmacies</option>' + phOpts + '</select>' +
+      '<select onchange="MOVE.owner=this.value;renderMovement()">' +
+        '<option value="">All brand owners</option>' + boOpts + '</select>' +
+      '<button class="btn sm ghost" onclick="dlMovement()">Download CSV</button>' +
+    '</div>' +
+    '<div class="kpis" style="margin-top:12px">' +
+      kpi('Opening', String(CB.r2(sum('opening')))) +
+      kpi('In', String(CB.r2(sum('in_total')))) +
+      kpi('Out', String(CB.r2(sum('out_total')))) +
+      kpi('Closing', String(CB.r2(sum('closing')))) +
+      kpi('Lines', String(rows.length)) +
+    '</div></div>';
+
+  if (!rows.length) {
+    $('#stockBody').innerHTML = '<div class="card"><div class="hint">Nothing moved in this ' +
+      'window, and nothing was on hand either side of it.</div></div>';
+    return;
+  }
+
+  /* The proof line. If this ever fails it is the report that is wrong, not the
+     stock, and saying so beats printing a total nobody can tie out. */
+  var drift = CB.r2(sum('opening') + sum('in_total') - sum('out_total') +
+                    sum('adjustment') - sum('closing'));
+  var h = '';
+  if (drift) {
+    h += '<div class="note warn"><b>The report does not tie out by ' + CB.r2(drift) + '.</b> ' +
+      'Opening plus in, less out, plus adjustments should equal closing exactly. Do not use ' +
+      'these figures until this is explained.</div>';
+  }
+
+  h += '<div class="card"><div class="scroll" style="max-height:560px"><table>' +
+    '<tr><th>Pharmacy</th><th>Brand</th><th>Product</th>' +
+    '<th class="num">Opening</th>' +
+    '<th class="num">Delivered</th><th class="num">Returned</th><th class="num">In</th>' +
+    '<th class="num">Sold</th><th class="num">Given</th><th class="num">Out</th>' +
+    '<th class="num">Adj</th><th class="num">Closing</th></tr>' +
+    rows.map(function (r) {
+      var cl = +r.closing;
+      return '<tr class="' + (cl < 0 ? 'bad' : '') + '">' +
+        '<td>' + esc(r.pharmacy_trading) + '</td>' +
+        '<td>' + esc(r.brand_owner_code) + '</td>' +
+        '<td>' + esc(r.product_name) + '</td>' +
+        '<td class="num">' + CB.r2(+r.opening) + '</td>' +
+        '<td class="num">' + (+r.in_delivery ? CB.r2(+r.in_delivery) : '') + '</td>' +
+        '<td class="num">' + (+r.in_return ? CB.r2(+r.in_return) : '') + '</td>' +
+        '<td class="num"><b>' + CB.r2(+r.in_total) + '</b></td>' +
+        '<td class="num">' + (+r.out_sold ? CB.r2(+r.out_sold) : '') + '</td>' +
+        '<td class="num">' + (+r.out_giveaway ? CB.r2(+r.out_giveaway) : '') + '</td>' +
+        '<td class="num"><b>' + CB.r2(+r.out_total) + '</b></td>' +
+        '<td class="num">' + (+r.adjustment ? CB.r2(+r.adjustment) : '') + '</td>' +
+        '<td class="num"><b>' + CB.r2(cl) + '</b></td></tr>';
+    }).join('') +
+    '<tr class="tt"><td colspan="3">Total &mdash; ' + rows.length + ' line(s)</td>' +
+    '<td class="num">' + CB.r2(sum('opening')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('in_delivery')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('in_return')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('in_total')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('out_sold')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('out_giveaway')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('out_total')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('adjustment')) + '</td>' +
+    '<td class="num">' + CB.r2(sum('closing')) + '</td></tr>' +
+    '</table></div></div>';
+
+  $('#stockBody').innerHTML = h;
+}
+
+function dlMovement() {
+  var t = {
+    columns: ['Pharmacy', 'Brand owner', 'Product', 'SKU', 'Opening', 'Delivered', 'Returned',
+              'Opening in window', 'Total in', 'Sold', 'Given away', 'Total out',
+              'Adjustment', 'Closing'],
+    rows: MOVE.rows.map(function (r) {
+      return {
+        'Pharmacy': r.pharmacy_trading, 'Brand owner': r.brand_owner_code,
+        'Product': r.product_name, 'SKU': r.product_sku || '',
+        'Opening': CB.r2(+r.opening),
+        'Delivered': CB.r2(+r.in_delivery), 'Returned': CB.r2(+r.in_return),
+        'Opening in window': CB.r2(+r.in_opening), 'Total in': CB.r2(+r.in_total),
+        'Sold': CB.r2(+r.out_sold), 'Given away': CB.r2(+r.out_giveaway),
+        'Total out': CB.r2(+r.out_total),
+        'Adjustment': CB.r2(+r.adjustment), 'Closing': CB.r2(+r.closing)
+      };
+    })
+  };
+  dl('CTG4U_Stock_Movement_' + MOVE.from + '_to_' + MOVE.to + '.csv',
+    new Blob([CB.toCSV(t)], { type: 'text/csv;charset=utf-8' }));
+}
+
 /* --------------------------------------------------------------- bundles */
 
 /* What a bundle is made of.
@@ -1981,6 +2307,7 @@ function drawBundles() {
       '<button class="btn sm ghost" onclick="$(&#39;#fileBundles&#39;).click()">Import</button>' +
       '<button class="btn sm ghost" onclick="exportBundles()">Export</button>' +
       '<button class="btn sm ghost" onclick="bundleTemplate()">Blank template</button>' +
+      '<button class="btn sm" onclick="importPromoPick()">Import Promo Details</button>' +
     '</div></div>';
 
   if (empty.length) {
@@ -2193,7 +2520,9 @@ function stockView(v) {
   STOCK.view = v;
   $('#stockViewOn').className  = 'btn sm' + (v === 'on' ? '' : ' ghost');
   $('#stockViewBun').className = 'btn sm' + (v === 'bundles' ? '' : ' ghost');
+  $('#stockViewMov').className = 'btn sm' + (v === 'movement' ? '' : ' ghost');
   if (v === 'bundles') { $('#stockHead').innerHTML = ''; renderBundles(); }
+  else if (v === 'movement') renderMovement();
   else renderStock();
 }
 
