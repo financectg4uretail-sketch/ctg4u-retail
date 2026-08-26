@@ -402,6 +402,34 @@ th.num{text-align:right}
 .g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}
 
+/* A row of small figures at the top of a panel.
+   Emitted by every view on the Stock tab and never given a rule, so five KPI
+   tiles stacked into a column of full-width cards a screen and a half tall.
+   Found by photographing the page rather than by reading it - the same class of
+   bug as tr.bad, and in the same feature. */
+.kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+
+/* A brand-owner heading inside a data table, and a totals row under one. Both
+   are set by the delivery, GRN, movement and stock screens; only the printed
+   documents had ever styled them, in their own stylesheet. */
+tr.grp td{
+  padding-top:14px;font:600 10.5px var(--sans);text-transform:uppercase;
+  letter-spacing:.06em;color:var(--blue-dk);border-bottom:1px solid var(--rule);
+  background:var(--surface);
+}
+tr.tt td{
+  border-top:1.5px solid var(--line-strong);border-bottom:0;
+  font-weight:700;background:var(--surface-2);
+}
+tr:hover td.chk,tr.tt:hover td{background:var(--surface-2)}
+
+/* The expanded movement trail under a stock row. It carries a table of its own,
+   so it takes the panel's own ground rather than the row-hover tint that would
+   otherwise follow the cursor across it. */
+tr.ledrow>td{background:var(--surface-2);padding:0 14px}
+tr.ledrow:hover>td{background:var(--surface-2)}
+tr.ledrow th{position:static;background:transparent;border-bottom:1px solid var(--line)}
+
 /* ------------------------------------------------------------ league table */
 
 /* Each row is drawn against the LEADER, not against the total: the question is
@@ -837,6 +865,25 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
 /* the leader keeps a ring rather than a different colour: same kind of thing,
    just the largest one */
 .pin.top .spot{fill-opacity:1;stroke:var(--cyan);stroke-width:2.4}
+
+/* The callout naming the best region.
+   These were written as `.mymap .leadline` and nothing has ever carried the
+   class `mymap` - the split map renders into `.mapsplit .mp svg`. So the rules
+   never matched: the connector line had no stroke and was therefore invisible,
+   and the label sat on no background at all. Rescoped to the marks themselves,
+   which is what the renderer sets.
+
+   Amber rather than a deeper blue, because the blue is already carrying the
+   amount and a "darkest blue plus" reads as more sales rather than as the
+   answer to a different question. */
+.mapsplit .st.lead{filter:drop-shadow(0 0 2px rgba(200,121,26,.35))}
+.mapsplit .leadline{stroke:#c8791a;stroke-opacity:.85;stroke-linecap:round}
+.mapsplit .leaddot{fill:#c8791a}
+.mapsplit .leadlab rect{fill:#fffaf2;stroke:#e0b27a}
+.mapsplit .leadlab .l1{fill:#8a520d;font-weight:700;letter-spacing:.03em}
+/* #a2691f read as 4.42:1 on the label ground, which is under AA for text this
+   size - it is a figure the operator is meant to read, not a decoration. */
+.mapsplit .leadlab .l2{fill:#8f5a15;font-variant-numeric:tabular-nums}
 
 .mapindex{margin-top:16px;border-top:1px solid var(--rule);padding-top:13px}
 .mapindex summary{

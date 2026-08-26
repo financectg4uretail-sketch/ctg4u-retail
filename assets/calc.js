@@ -202,6 +202,7 @@
     serviceInvPrefix: 'CTGSF',
     payoutBillPrefix: 'CTGPO',
     deliveryOrderPrefix: 'CTGDO',
+    grnPrefix: 'CTGGRN',
     startNumber: 1,
     // Per-type starts. The website reserves a block of numbers from the
     // database for each document type, so the three sequences advance
@@ -969,6 +970,49 @@
     c = cfg(c);
     var ph = d.pharmacy || {};
     var rows = d.lines || [];
+    var co = c.coName || 'CTG4U RETAIL SDN BHD';
+
+    /* A goods return note is this same document walking the other way, and the
+     * only things that change are the ones a reader would notice: who is handing
+     * over to whom, what the tick column is confirming, and the sentence about
+     * title. The layout, the grouping by brand owner and the absence of any
+     * price are identical, because they are right for both.
+     *
+     * The GRN's own sentence has one job the delivery order's does not: to say
+     * plainly that this is not a credit note. Goods coming back off a shelf they
+     * were never sold from is a stock event and nothing else, and a pharmacy
+     * that files it as a credit will chase money that was never owed. */
+    var isGrn = d.kind === 'grn';
+    var W = isGrn ? {
+      title: 'Goods Return Note',
+      dateLabel: 'Collected',
+      party: 'Collected from',
+      tick: 'Returned',
+      voidTail: '. The goods it listed are back on the pharmacy&rsquo;s account.',
+      statement: '<b>Goods returned from consignment.</b> The items above have been collected ' +
+        'from the pharmacy named and come off the stock held at its premises. Title has ' +
+        'remained with ' + esc(co) + ' throughout, so this note is not a sale, a purchase ' +
+        'or a credit note, and nothing already reported as sold in an earlier month is ' +
+        'affected by it.',
+      sigA: 'Returned by ' + esc(ph.trading || ''),
+      sigAHint: 'Name, designation, date &amp; company stamp',
+      sigB: 'Collected in good order by ' + esc(co),
+      sigBHint: 'Name, date'
+    } : {
+      title: 'Delivery Order',
+      dateLabel: 'Delivered',
+      party: 'Deliver to',
+      tick: 'Received',
+      voidTail: '. The goods it listed are not on the pharmacy&rsquo;s account.',
+      statement: '<b>Goods supplied on consignment.</b> Title to the goods listed above ' +
+        'remains with ' + esc(co) + ' until they are sold by the receiving pharmacy. They are ' +
+        'held at the pharmacy&rsquo;s premises at ' + esc(co) + '&rsquo;s risk of ownership ' +
+        'and are to be reported on the monthly sold-out return. Unsold goods remain returnable.',
+      sigA: 'Delivered by',
+      sigAHint: 'Name, date',
+      sigB: 'Received in good order by ' + esc(ph.trading || ''),
+      sigBHint: 'Name, designation, date &amp; company stamp'
+    };
 
     var kv = function (k, v) {
       return v ? '<div><span>' + k + '</span><b>' + esc(v) + '</b></div>' : '';
@@ -1000,7 +1044,7 @@
 
     return '<section class="do">' +
       '<div class="band"><span class="bco">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</span>' +
-      '<span class="bti">Delivery Order' +
+      '<span class="bti">' + W.title +
         (d.status === 'cancelled' ? ' &mdash; CANCELLED' : '') + '</span></div>' +
 
       '<div class="head">' +
@@ -1012,9 +1056,9 @@
         '</div>' +
         '<div class="facts">' +
           '<div class="ref">' + esc(d.number || '—') + '</div>' +
-          '<div class="per">Delivered ' + esc(d.deliveredOn || '') + '</div>' +
+          '<div class="per">' + W.dateLabel + ' ' + esc(d.deliveredOn || '') + '</div>' +
           '<div class="kv">' +
-            kv('Deliver to', ph.trading) +
+            kv(W.party, ph.trading) +
             kv('Registered name', ph.contact) +
             kv('Company no.', ph.brn) +
             kv('Location', [ph.town, ph.state].filter(Boolean).join(', ')) +
@@ -1024,30 +1068,24 @@
       '</div>' +
 
       (d.status === 'cancelled'
-        ? '<div class="void">This delivery order has been cancelled' +
-          (d.cancelReason ? ': ' + esc(d.cancelReason) : '') +
-          '. The goods it listed are not on the pharmacy&rsquo;s account.</div>'
+        ? '<div class="void">This ' + W.title.toLowerCase() + ' has been cancelled' +
+          (d.cancelReason ? ': ' + esc(d.cancelReason) : '') + W.voidTail + '</div>'
         : '') +
 
       '<table class="dt"><thead><tr><th>Product</th><th>SKU</th>' +
-      '<th class="n">Qty</th><th class="chk">Received</th></tr></thead>' +
+      '<th class="n">Qty</th><th class="chk">' + W.tick + '</th></tr></thead>' +
       '<tbody>' + body +
       '<tr class="tt"><td colspan="2">Total &mdash; ' + rows.length + ' line(s)</td>' +
       '<td class="n">' + r2(units) + '</td><td></td></tr></tbody></table>' +
 
       /* The sentence the document exists for. */
-      '<div class="cons"><b>Goods supplied on consignment.</b> Title to the goods listed above ' +
-      'remains with ' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + ' until they are sold by the ' +
-      'receiving pharmacy. They are held at the pharmacy&rsquo;s premises at ' +
-      esc(c.coName || 'CTG4U RETAIL SDN BHD') + '&rsquo;s risk of ownership and are to be ' +
-      'reported on the monthly sold-out return. Unsold goods remain returnable.</div>' +
+      '<div class="cons">' + W.statement + '</div>' +
 
       (d.note ? '<div class="ft">' + esc(d.note) + '</div>' : '') +
 
       '<div class="sig">' +
-        '<div>Delivered by<br><span></span><i>Name, date</i></div>' +
-        '<div>Received in good order by ' + esc(ph.trading || '') +
-        '<br><span></span><i>Name, designation, date &amp; company stamp</i></div>' +
+        '<div>' + W.sigA + '<br><span></span><i>' + W.sigAHint + '</i></div>' +
+        '<div>' + W.sigB + '<br><span></span><i>' + W.sigBHint + '</i></div>' +
       '</div>' +
       '</section>';
   }

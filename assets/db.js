@@ -516,6 +516,15 @@
           p_pharmacy: pharmacyId || null, p_brand_owner: brandOwnerId || null
         }).then(function (r) { fail('Read stock movement', r.error); return r.data || []; });
       },
+      /* Every movement of one product at one pharmacy, in order, with the
+         document that caused it and the balance after it. A stock figure with
+         no way to ask where it came from is a number the operator has to take
+         on trust, and a shelf that disagrees with it is then unarguable in
+         both directions. */
+      ledger: function (pharmacyId, productId) {
+        return sb.rpc('stock_ledger', { p_pharmacy: pharmacyId, p_product: productId })
+          .then(function (r) { fail('Read the stock ledger', r.error); return r.data || []; });
+      },
       /* Whether a run's sales ever reached the ledger. Asked by the run detail,
          because "finalised" and "the shelves know about it" are two different
          facts and until now only one of them was ever shown. */
@@ -533,31 +542,39 @@
       }
     },
 
-    /* -------------------------------------------------- delivery orders */
+    /* ---------------------------------------------------- stock documents */
 
-    /* Raising the delivery order is what puts the stock in. One write, so the
-     * paper the pharmacy signed and the ledger cannot disagree. */
-    deliveries: {
-      list: function (pharmacyId, from, to) {
-        return sb.rpc('delivery_list', {
-          p_pharmacy: pharmacyId || null, p_from: from || null, p_to: to || null
-        }).then(function (r) { fail('Read delivery orders', r.error); return r.data || []; });
+    /* A delivery order and a goods return note are the same document travelling
+     * in opposite directions: a header, a pharmacy, a date, a number and lines.
+     * A DO takes goods from CTG4U to the pharmacy; a GRN brings them back. They
+     * share one implementation because they share the rule that matters -
+     * raising the document IS the stock movement, one write, so the paper
+     * somebody signed and the shelf can never disagree. Two copies of that rule
+     * is how they start to.
+     *
+     * `kind` is 'delivery' or 'grn'; passing null to list() shows both. */
+    docs: {
+      list: function (kind, pharmacyId, from, to) {
+        return sb.rpc('stock_doc_list', {
+          p_kind: kind || null, p_pharmacy: pharmacyId || null,
+          p_from: from || null, p_to: to || null
+        }).then(function (r) { fail('Read stock documents', r.error); return r.data || []; });
       },
       get: function (id) {
-        return sb.rpc('delivery_get', { p_id: id })
-          .then(function (r) { fail('Read delivery order', r.error); return r.data || null; });
+        return sb.rpc('stock_doc_get', { p_id: id })
+          .then(function (r) { fail('Read stock document', r.error); return r.data || null; });
       },
-      create: function (pharmacyId, on, prefix, reference, note, rows) {
-        return sb.rpc('delivery_create', {
-          p_pharmacy: pharmacyId, p_on: on, p_prefix: prefix || 'CTGDO',
+      create: function (kind, pharmacyId, on, prefix, reference, note, rows) {
+        return sb.rpc('stock_doc_create', {
+          p_kind: kind, p_pharmacy: pharmacyId, p_on: on, p_prefix: prefix || null,
           p_reference: reference || null, p_note: note || null, p_rows: rows || []
-        }).then(function (r) { fail('Raise delivery order', r.error); return r.data || {}; });
+        }).then(function (r) { fail('Raise stock document', r.error); return r.data || {}; });
       },
-      /* Cancelling takes the stock back out but keeps the document - the
-         number is already on paper at the pharmacy. */
+      /* Cancelling takes the stock back where it was but keeps the document -
+         the number is already on paper at the pharmacy. */
       cancel: function (id, reason) {
-        return sb.rpc('delivery_cancel', { p_id: id, p_reason: reason || null })
-          .then(function (r) { fail('Cancel delivery order', r.error); return r.data || {}; });
+        return sb.rpc('stock_doc_cancel', { p_id: id, p_reason: reason || null })
+          .then(function (r) { fail('Cancel stock document', r.error); return r.data || {}; });
       }
     },
 
