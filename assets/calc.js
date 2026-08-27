@@ -1752,8 +1752,22 @@
     c = cfg(c);
     xeroServiceInvoices(settlement, c);
     xeroPayoutBills(settlement, c);
-    var show = (only == null || only < 0) ? settlement.projects
-      : [settlement.projects[only]].filter(Boolean);
+    /* `only` is an index, which is what the dropdown on the Outputs tab has.
+       A brand-owner CODE is the other thing a caller naturally reaches for, and
+       passing one used to produce a perfectly valid blank document - a silent
+       failure in a file somebody is about to send to another company. Both are
+       accepted now, and anything that matches nothing prints everything rather
+       than nothing, because an empty statement is never the intended answer. */
+    var show = settlement.projects;
+    if (only != null && only !== '' && !(typeof only === 'number' && only < 0)) {
+      var pick = typeof only === 'number'
+        ? [settlement.projects[only]]
+        : settlement.projects.filter(function (p) {
+            return p.code === only || (p.project && p.project.code === only);
+          });
+      pick = pick.filter(Boolean);
+      if (pick.length) show = pick;
+    }
     return '<!doctype html><html><head><meta charset="utf-8"><title>Consignment Settlement ' +
       esc(periodLabel(c.period)) + '</title><style>' + STMT_CSS + '</style></head><body>' +
       show.map(function (P) { return statementHTML(P, c); }).join('') +
