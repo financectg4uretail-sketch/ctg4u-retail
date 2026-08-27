@@ -183,7 +183,8 @@
      * blank rather than guessed: a registration number invented for a document
      * that goes to another company is worse than an absent one. */
     coName: 'CTG4U RETAIL SDN BHD',
-    coReg: '',                   // company registration no
+    coReg: '',                   // business registration no (SSM)
+    coTin: '',                   // tax identification no (LHDN)
     coSst: '',                   // SST registration no, if registered
     coAddress: '',               // free text, newlines become lines
     coEmail: '',
@@ -993,6 +994,59 @@
     return { findings: out, bad: out.filter(function (x) { return !x.ok; }).length };
   }
 
+  /* Who issued this, stated the same way on everything.
+   *
+   * Full name, address, business registration number and tax identification
+   * number are what a Malaysian document has to carry to be usable - by the
+   * recipient's own accounts department, by LHDN, and by anybody reconciling
+   * one of these to a bank line a year later. They were spread across two
+   * renderers that had already drifted: the settlement statement printed an SST
+   * number the delivery order did not, and NEITHER printed a TIN because the
+   * setting did not exist.
+   *
+   * So it is written once. A second copy is how two documents from the same
+   * company start describing it differently. */
+  function issuerHTML(c) {
+    c = cfg(c);
+    var name = c.coName || 'CTG4U RETAIL SDN BHD';
+    var id = function (label, v) {
+      return v ? '<div class="reg">' + label + ' ' + esc(v) + '</div>' : '';
+    };
+    return '<div class="issuer">' +
+      '<div class="co">' + esc(name) + '</div>' +
+      id('Company no.', c.coReg) +
+      id('TIN', c.coTin) +
+      id('SST no.', c.coSst) +
+      '<div class="addr">' + lines(c.coAddress).map(function (l) {
+        return '<div>' + esc(l) + '</div>';
+      }).join('') + '</div>' +
+      (c.coEmail || c.coPhone
+        ? '<div class="addr">' +
+          (c.coEmail ? '<div>' + esc(c.coEmail) + '</div>' : '') +
+          (c.coPhone ? '<div>' + esc(c.coPhone) + '</div>' : '') + '</div>'
+        : '') +
+      '</div>';
+  }
+
+  /* What a document would have to leave out, said before it is printed.
+   *
+   * A statutory field that is simply absent looks identical to one that does
+   * not apply, and the document goes out either way. This is the only warning
+   * about it that arrives before somebody else is reading the paper. */
+  function statutoryWarnings(c) {
+    c = cfg(c);
+    /* No check on the name: cfg() defaults it, and unlike a registration
+       number a company's own name is safe to default - inventing an SSM or tax
+       number for a document that goes to another company is not. A check that
+       cannot fire is worse than none, because it reads as coverage. */
+    var out = [];
+    if (!String(c.coAddress || '').trim()) out.push('The company address is blank, so no document can print one.');
+    if (!String(c.coReg || '').trim()) out.push('The business registration number (SSM) is blank.');
+    if (!String(c.coTin || '').trim()) out.push('The tax identification number (TIN) is blank. ' +
+      'Every invoice, settlement statement and delivery order is required to carry it.');
+    return out;
+  }
+
   /* ------------------------------------------------------ delivery order */
 
   /* The paper that travels with the goods.
@@ -1089,12 +1143,7 @@
         (d.status === 'cancelled' ? ' &mdash; CANCELLED' : '') + '</span></div>' +
 
       '<div class="head">' +
-        '<div class="issuer">' +
-          '<div class="co">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</div>' +
-          (c.coReg ? '<div class="reg">Company no. ' + esc(c.coReg) + '</div>' : '') +
-          '<div class="addr">' + addr + '</div>' +
-          (c.coEmail ? '<div class="addr"><div>' + esc(c.coEmail) + '</div></div>' : '') +
-        '</div>' +
+        issuerHTML(c) +
         '<div class="facts">' +
           '<div class="ref">' + esc(d.number || '—') + '</div>' +
           '<div class="per">' + W.dateLabel + ' ' + esc(d.deliveredOn || '') + '</div>' +
@@ -1102,6 +1151,9 @@
             kv(W.party, ph.trading) +
             kv('Registered name', ph.contact) +
             kv('Company no.', ph.brn) +
+            /* The pharmacy's TIN has been in the master all along and was the
+               one statutory field this document did not print. */
+            kv('TIN', ph.tin) +
             kv('Location', [ph.town, ph.state].filter(Boolean).join(', ')) +
             kv('Reference', d.reference) +
           '</div>' +
@@ -1668,14 +1720,7 @@
       '<span class="bti">Consignment Settlement Statement</span></div>' +
 
       '<div class="head">' +
-        '<div class="issuer">' +
-          '<div class="co">' + esc(c.coName || 'CTG4U RETAIL SDN BHD') + '</div>' +
-          (c.coReg ? '<div class="reg">Company no. ' + esc(c.coReg) + '</div>' : '') +
-          (c.coSst ? '<div class="reg">SST no. ' + esc(c.coSst) + '</div>' : '') +
-          '<div class="addr">' + addr + '</div>' +
-          (c.coEmail ? '<div class="addr"><div>' + esc(c.coEmail) + '</div></div>' : '') +
-          (c.coPhone ? '<div class="addr"><div>' + esc(c.coPhone) + '</div></div>' : '') +
-        '</div>' +
+        issuerHTML(c) +
         '<div class="facts">' +
           '<div class="ref">' + esc(P.payoutBillNumber || '—') + '</div>' +
           '<div class="per">Statement for ' + esc(monthStart(c.period)) + ' to ' +
@@ -2438,6 +2483,7 @@
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,
     xeroPreflight: xeroPreflight,
+    issuerHTML: issuerHTML, statutoryWarnings: statutoryWarnings,
     statementHTML: statementHTML, statementDoc: statementDoc, STMT_CSS: STMT_CSS, esc: esc,
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,

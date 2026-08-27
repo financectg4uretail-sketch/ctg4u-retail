@@ -243,6 +243,7 @@
         connected organisation, so they are not held in two places.</span>
     </div>
     <div class="grid g3" id="cfgCompany"></div>
+    <div id="cfgStat" style="margin-top:14px"></div>
   </div>
   <div class="card">
     <h2>Commercial terms</h2>
@@ -307,7 +308,7 @@
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=cd1590ca70"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=a639b5a575"></script>
+<script src="assets/calc.js?v=ac0af6ac7a"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -328,7 +329,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '6b69a2661292';
+  var MINE = 'a5a58063535d';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -4321,7 +4322,8 @@ function pullBrandOwnerDetails(btn) {
 var CFG_FIELDS = {
   company: [
     ['coName', 'Company name', 'As it should appear on a statement', 'text'],
-    ['coReg', 'Company registration no.', 'Left off the statement when blank', 'text'],
+    ['coReg', 'Business registration no. (SSM)', 'Printed on every document', 'text'],
+    ['coTin', 'Tax identification no. (TIN)', 'Printed on every document — required on all of them', 'text'],
     ['coSst', 'SST registration no.', 'Left off when blank', 'text'],
     ['coAddress', 'Registered address', 'One line per line', 'area'],
     ['coEmail', 'Contact email', 'Where a brand owner should reply', 'text'],
@@ -4406,6 +4408,26 @@ function renderRateWarnings() {
     ? '<div class="note warn"><b>Check these rates before billing a month.</b><ul style="margin:8px 0 0;padding-left:20px">' +
       w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>'
     : '';
+  renderStatutoryWarnings();
+}
+
+/* The four particulars every document has to carry: full name, address,
+   business registration number, tax identification number.
+ *
+ * A blank one of these does not break anything - it simply does not print, and
+ * the document goes out looking finished. That is the whole reason for saying
+ * it here, in front of the person who can fill it in, rather than discovering
+ * it when a pharmacy's accounts department sends the invoice back. */
+function renderStatutoryWarnings() {
+  var host = $('#cfgStat'); if (!host) return;
+  var w = CB.statutoryWarnings(ST.cfg);
+  host.innerHTML = w.length
+    ? '<div class="note bad"><b>Documents cannot be issued complete.</b> Every invoice, ' +
+      'settlement statement and delivery order carries these:' +
+      '<ul style="margin:8px 0 0;padding-left:20px">' +
+      w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>'
+    : '<div class="note"><b>Company particulars are complete.</b> Name, address, registration ' +
+      'number and TIN print on every invoice, settlement statement and delivery order.</div>';
 }
 function setCfg(k, v) {
   if (typeof CB.DEFAULTS[k] === 'number') v = CB.num(v);
@@ -4589,6 +4611,13 @@ function finaliseRun() {
       ? '\n\nNOTE: ' + st.documentCount + ' document number(s) were already issued for this period. ' +
         'The new ones continue after them, so nothing will clash.'
       : '';
+    /* A month's worth of documents about to be issued without a statutory
+       particular is worth stopping for, not a note somebody scrolls past. */
+    var sw = CB.statutoryWarnings(ST.cfg);
+    if (sw.length && !confirm('These company particulars are missing, and every document in ' +
+      'this run carries them:\n\n' + sw.map(function (x) { return '  \u2022 ' + x; }).join('\n\n') +
+      '\n\nFill them in on Settings first. Carry on anyway?')) { release(); go('cfg'); return; }
+
     var rw = CB.rateWarnings(ST.cfg);
     if (rw.length && !confirm('Before finalising ' + CB.periodLabel(period) + ', check these rates:\n\n' +
       rw.map(function (x) { return '  \u2022 ' + x; }).join('\n\n') +
