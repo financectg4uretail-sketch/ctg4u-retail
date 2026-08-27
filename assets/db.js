@@ -236,6 +236,8 @@
               address: b.address || '', phone: b.phone || '',
               brn: b.brn || '', taxNo: b.tax_no || '',
               xeroSyncedAt: b.xero_synced_at || null,
+              /* what the pharmacies call this brand on their own sheets */
+              aliases: b.aliases || [],
               trackingOption: b.tracking_option || '', active: b.active
             };
           }),
@@ -371,6 +373,10 @@
     addProductAlias: function (id, alias) {
       return sb.rpc('product_add_alias', { p_id: id, p_alias: alias })
         .then(function (r) { fail('Save alias', r.error); return r.data || []; });
+    },
+    addBrandOwnerAlias: function (id, alias) {
+      return sb.rpc('brand_owner_add_alias', { p_id: id, p_alias: alias })
+        .then(function (r) { fail('Save brand name', r.error); return r.data || []; });
     },
     addPharmacyAlias: function (id, alias) {
       return sb.rpc('pharmacy_add_alias', { p_id: id, p_alias: alias })

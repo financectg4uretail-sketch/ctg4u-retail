@@ -133,6 +133,47 @@
       : null;
   }
 
+  /* Which brand owner a pharmacy's billing block belongs to.
+   *
+   * The title over a block is what the PHARMACY calls the brand - "Mizino
+   * Placenta", "MCS (VentureHub)", "Beyoute" - and the master holds the company
+   * - "CTG4U WELLNESS - MIZINO PLACENTA", "CTG4U WELLNESS - MCS". Those score
+   * between 0.36 and 0.64 against each other, so there is no threshold that
+   * accepts them and is also safe: MIZINO PREMIUM, MIZINO PLACENTA and MIZINO
+   * ENZYME are three different legal entities sharing a word, and this decides
+   * which of them gets paid.
+   *
+   * So the same shape as the pharmacy and product sides. A confirmed alias is
+   * the operator's own answer and outranks any score. A tie decides nothing and
+   * is reported. Everything else is offered as a suggestion for a person to
+   * accept once, after which the alias settles it for good.
+   */
+  function matchBrandOwner(raw, projects, threshold) {
+    var key = normKey(raw);
+    if (!key) return null;
+    projects = projects || [];
+
+    var byAlias = projects.filter(function (p) {
+      return (p.aliases || []).some(function (a) { return normKey(a) === key; });
+    });
+    if (byAlias.length) {
+      /* Two brand owners claiming one alias is the master contradicting itself.
+         Refusing is the only honest answer - picking the first pays a company
+         chosen by load order. */
+      return { item: byAlias[0], score: 1, rivals: byAlias.length, tied: byAlias, via: 'alias' };
+    }
+
+    var bm = bestMatch(raw, projects, ['name', 'code'], threshold == null ? SUGGEST_AT : threshold);
+    if (bm) bm.via = 'name';
+    return bm;
+  }
+
+  /* Applied by itself only on the operator's own confirmed answer, or on a
+     score high enough AND unrivalled. Anything else is shown, never assumed. */
+  function brandDecided(m) {
+    return !!(m && m.rivals === 1 && (m.via === 'alias' || m.score >= APPLY_AT));
+  }
+
   /* -------------------------------------------------------------- config */
 
   var DEFAULTS = {
@@ -1740,13 +1781,35 @@
   var PKG_BILLING_RE    = /^\s*billing\s*$/i;
   var PKG_STOCKOUT_RE   = /^\s*stock\s*out\s*$/i;
 
+  function isPackageHeaderRow(row) {
+    var cells = (row || []).map(function (c) {
+      return String(c == null ? '' : c).trim().toLowerCase();
+    });
+    return cells.indexOf('date') >= 0 && cells.indexOf('package') >= 0 &&
+           cells.indexOf('price') >= 0;
+  }
+
+  /* EVERY header row in the sheet, in order.
+   *
+   * A pharmacy's tab is not one billing sheet. It is one per brand, stacked:
+   * the Mizino Placenta block, then Beyoute's, then MasterNerv's, each with its
+   * own header, its own product columns and its own totals. The first header
+   * was all anything looked for, and the damage was not that the rest went
+   * unread - it is that the read SUCCEEDED. `lines` came from the first block
+   * while `stated` kept being overwritten down the sheet until it held the
+   * last block's totals, so the cross-check compared one brand's sales against
+   * another brand's billed amount and reported a discrepancy nobody could
+   * explain. Measured against a real month: 111 of 343 sale rows, MYR 44,674
+   * of MYR 129,244. */
+  function packageHeaderRows(rows) {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) if (isPackageHeaderRow(rows[i])) out.push(i);
+    return out;
+  }
+
   function findPackageHeader(rows) {
     for (var i = 0; i < Math.min(rows.length, 15); i++) {
-      var cells = (rows[i] || []).map(function (c) {
-        return String(c == null ? '' : c).trim().toLowerCase();
-      });
-      if (cells.indexOf('date') >= 0 && cells.indexOf('package') >= 0 &&
-          cells.indexOf('price') >= 0) return i;
+      if (isPackageHeaderRow(rows[i])) return i;
     }
     return -1;
   }
@@ -1758,9 +1821,20 @@
     return -1;
   }
 
+  /* One block. Given a whole multi-block sheet this reads the FIRST one and
+     stops cleanly at the next header, rather than mixing one block's lines with
+     another's totals. Callers billing a month want parsePackageSheets(). */
   function parsePackageSheet(rows) {
     var h = findPackageHeader(rows);
     if (h < 0) return null;
+
+    /* Stop at the next block. Without this every label below - Total Sales,
+       Commission, the Stock Out tally - is read as though it belonged here. */
+    var nextHead = -1;
+    for (var nh = h + 1; nh < rows.length; nh++) {
+      if (isPackageHeaderRow(rows[nh])) { nextHead = nh; break; }
+    }
+    if (nextHead > 0) rows = rows.slice(0, nextHead);
 
     var cells = (rows[h] || []).map(function (c) {
       return String(c == null ? '' : c).trim().toLowerCase();
@@ -1810,11 +1884,35 @@
       }
     }
 
+    /* A rate cell that Excel decided was a time.
+     *
+     * 0.192 with a time number-format displays as 04:36:28.8 - 19.2% of a day -
+     * and both SheetJS and openpyxl hand back the time rather than the number.
+     * num() then strips the colons and reads four million per cent. The cell
+     * holds the right value; only its clothes are wrong, so it is undressed
+     * here rather than discarded. 22 of the 110 blocks in the file this was
+     * written against carry it, on the Commission or the Insurans row. */
+    var rateNum = function (v) {
+      if (v instanceof Date) {
+        /* LOCAL, not UTC. SheetJS builds this Date from the workbook's serial
+           in local time, so the wall clock on it IS the fraction - and the
+           offset it was built with is the one in force at the Excel epoch,
+           which for Malaysia is +06:55, not today's +08:00. Reading it back in
+           UTC gave 0.9035 where the cell says 0.192. Milliseconds are part of
+           it too: 04:36:28.800 is 0.192 exactly, 04:36:28 is not. */
+        return (v.getHours() * 3600 + v.getMinutes() * 60 + v.getSeconds() +
+                v.getMilliseconds() / 1000) / 86400;
+      }
+      var m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?\s*$/.exec(String(v == null ? '' : v));
+      if (m) return (+m[1] * 3600 + +m[2] * 60 + (+m[3] || 0)) / 86400;
+      return num(v);
+    };
+
     var lines = [], giveaways = [], stated = {}, inData = true;
     for (var k = h + 1; k < rows.length; k++) {
       var row = rows[k] || [];
       var label = String(row[col.pkg] == null ? '' : row[col.pkg]).trim();
-      var rate = num(row[0]);
+      var rate = rateNum(row[0]);
       var price = num(row[col.price]);
 
       /* The first totals label closes the sale rows for good. Below the totals
@@ -1907,6 +2005,57 @@
       lines: lines, giveaways: giveaways, stated: stated,
       statedStockOut: statedStock
     };
+  }
+
+  /* The brand a block belongs to, and the period it declares.
+   *
+   * Each block is titled on the row above its header - "020 Mizino Placenta
+   * Overall Billing 21 Jun-20 Jul 2026". That names the brand, which is worth
+   * far more than asking the operator to pick one per sheet: a tab holds five
+   * brands and only the sheet knows which block is which. It also states the
+   * billing period, which is the one thing that catches a file being read into
+   * the wrong month - and these cycles run 21st to 20th, not calendar months. */
+  function packageBlockTitle(t) {
+    t = String(t == null ? '' : t).trim();
+    var range = (t.match(/\d{1,2}\s*\w{3,}\s*-\s*\d{1,2}\s*\w{3,}\s*\d{4}/) || [''])[0].trim();
+    var brand = t
+      .replace(/^\s*\d+\s+/, '')                 // a leading account number
+      .replace(/overall\s+billing.*$/i, '')
+      .replace(/\d{1,2}\s*\w{3,}\s*-\s*\d{1,2}\s*\w{3,}\s*\d{4}/, '')
+      .trim();
+    return { title: t, brand: brand, periodLabel: range };
+  }
+
+  /* Every billing block in one pharmacy's tab.
+   *
+   * The pharmacy states who it is once, above the first block; a later block's
+   * "rows above" are the previous block's totals, so identity is taken from the
+   * first and given to the rest rather than re-read. */
+  function parsePackageSheets(rows) {
+    var heads = packageHeaderRows(rows);
+    if (!heads.length) return [];
+
+    var out = [];
+    heads.forEach(function (h, n) {
+      var end = n + 1 < heads.length ? heads[n + 1] : rows.length;
+      var p = parsePackageSheet(rows.slice(n === 0 ? 0 : h, end));
+      if (!p) return;
+      var t = packageBlockTitle((rows[h - 1] || [])[0] || (rows[h - 1] || [])[1]);
+      p.block = n;
+      p.blockTitle = t.title;
+      p.brand = t.brand;
+      p.periodLabel = t.periodLabel;
+      out.push(p);
+    });
+
+    if (out.length) {
+      var id = out[0];
+      out.forEach(function (p) {
+        if (!p.pharmacyTrading) p.pharmacyTrading = id.pharmacyTrading;
+        if (!p.pharmacyContact) p.pharmacyContact = id.pharmacyContact;
+      });
+    }
+    return out;
   }
 
   /* Every single SKU that left the shelf, worked out from what each package
@@ -2287,7 +2436,9 @@
     packageGiveawayLines: packageGiveawayLines,
     productRollup: productRollup, shares: shares,
     deliveryOrderHTML: deliveryOrderHTML, deliveryOrderDoc: deliveryOrderDoc, DO_CSS: DO_CSS,
+    matchBrandOwner: matchBrandOwner, brandDecided: brandDecided,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
+    parsePackageSheets: parsePackageSheets, packageHeaderRows: packageHeaderRows,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
   };
 });

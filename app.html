@@ -305,9 +305,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=fa5becbe3a"></script>
+<script src="assets/db.js?v=cd1590ca70"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=8ed8b46c49"></script>
+<script src="assets/calc.js?v=3dd41b66bb"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -328,7 +328,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '408d2d828b2e';
+  var MINE = '06fae3f57736';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1607,18 +1607,38 @@ function readWorkbook(fname, buf) {
     /* A pharmacy billing sheet is a cross-tab of packages and states its own
      * totals, so it is read by its own parser rather than by column detection. */
     if (CB.isPackageSheet(rows)) {
-      var parsed = CB.parsePackageSheet(rows);
-      // the registered name above the header is what Xero knows the pharmacy as
-      var m = parsed.pharmacyContact
-        ? CB.bestMatch(parsed.pharmacyContact, ST.master.pharmacies, ['contact', 'trading', 'code'], 0.72)
+      /* One tab is not one bill. These sheets stack a separate billing
+         statement per brand down the same page - five of them on a busy
+         pharmacy - each with its own header, its own totals and its own
+         commission line. Reading only the first took one brand and threw the
+         rest away silently, which is the worst possible way to lose a month. */
+      var blocks = CB.parsePackageSheets(rows);
+      if (!blocks.length) return;
+
+      /* The pharmacy belongs to the TAB, not to a block: one shop, several
+         brands. Resolved once, so five blocks cannot reach five different
+         answers about whose shop this is. */
+      var id = blocks[0];
+      var m = id.pharmacyContact
+        ? CB.bestMatch(id.pharmacyContact, ST.master.pharmacies, ['contact', 'trading', 'code'], 0.72)
         : null;
-      if (!m) m = CB.bestMatch(parsed.pharmacyTrading || sn, ST.master.pharmacies, ['trading', 'contact', 'code'], 0.7);
-      ST.packages.push({
-        file: fname, name: sn, parsed: parsed,
-        pharmacy: m ? m.item : null,
-        matchedOn: m ? (parsed.pharmacyContact && CB.similarity(parsed.pharmacyContact, m.item.contact) >= 0.9
-          ? 'registered name' : 'trading name') : null,
-        use: true
+      if (!m) m = CB.bestMatch(id.pharmacyTrading || sn, ST.master.pharmacies, ['trading', 'contact', 'code'], 0.7);
+      var how = m ? (id.pharmacyContact && CB.similarity(id.pharmacyContact, m.item.contact) >= 0.9
+        ? 'registered name' : 'trading name') : null;
+
+      blocks.forEach(function (parsed) {
+        var bm = parsed.brand ? CB.matchBrandOwner(parsed.brand, ST.master.projects) : null;
+        var decided = CB.brandDecided(bm);
+        ST.packages.push({
+          file: fname, name: sn, parsed: parsed,
+          brandRaw: parsed.brand || '', periodLabel: parsed.periodLabel || '',
+          brand: decided ? bm.item : null,
+          brandSuggestion: (!decided && bm) ? bm.item : null,
+          brandScore: bm ? bm.score : 0,
+          brandRivals: (bm && bm.rivals > 1) ? bm.tied : null,
+          pharmacy: m ? m.item : null, matchedOn: how,
+          use: true
+        });
       });
       return;
     }
@@ -1659,6 +1679,10 @@ function renderPackages() {
   });
 
   var billable = rowsOut.filter(function (r) { return !r.zero && r.P.use; });
+  /* A block with no brand owner cannot be settled to anybody, so it cannot be
+     billed either - the pharmacy would be invoiced for goods with no owner.
+     Same gate as an unmatched pharmacy, for the same reason. */
+  var noBrand = rowsOut.filter(function (r) { return !r.zero && !r.P.brand; });
   var zeroes = rowsOut.filter(function (r) { return r.zero; });
   var unmatched = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy; });
   var broken = rowsOut.filter(function (r) { return !r.zero && !r.x.ok; });
@@ -1764,19 +1788,41 @@ function renderPackages() {
   }
 
   h += '<div class="scroll" style="max-height:420px;margin-top:12px"><table>' +
-    '<tr><th></th><th>Sheet</th><th>Pharmacy</th><th class="num">Packages</th>' +
+    '<tr><th></th><th>Sheet</th><th>Pharmacy</th><th>Brand owner</th><th class="num">Packages</th>' +
     '<th class="num">Gross</th><th class="num">Invoice</th><th>Sheet says</th><th></th></tr>' +
     rowsOut.map(function (r, i) {
       var st = r.zero ? '<span class="badge">nothing sold</span>'
         : !r.P.pharmacy ? '<span class="badge bad">no pharmacy</span>'
-          : !r.x.ok ? '<span class="badge bad">disagrees</span>'
-            : '<span class="badge ok">ok</span>';
+          : !r.P.brand ? '<span class="badge bad">no brand owner</span>'
+            : !r.x.ok ? '<span class="badge bad">disagrees</span>'
+              : '<span class="badge ok">ok</span>';
+
+      /* Unresolved brands get the list rather than a guess. A block title says
+         "Mizino Placenta" where the master says "CTG4U WELLNESS - MIZINO
+         PLACENTA" - 0.64, and no threshold that accepts that is safe while
+         MIZINO PREMIUM and MIZINO ENZYME are different companies. Confirmed
+         once, it is remembered and never asked again. */
+      var brandCell = r.P.brand
+        ? esc(r.P.brand.name) + '<div class="mut">' + esc(r.P.brandRaw || '') + '</div>'
+        : '<select onchange="mapBrand(' + i + ',this.value)"><option value="">— which brand owner? —</option>' +
+          owners.map(function (o) {
+            return '<option value="' + esc(o.code) + '"' +
+              (r.P.brandSuggestion && r.P.brandSuggestion.code === o.code ? ' selected' : '') +
+              '>' + esc(o.name) + '</option>';
+          }).join('') + '</select>' +
+          '<div class="mut">' + esc(r.P.brandRaw || '(no title on the block)') +
+          (r.P.brandRivals
+            ? ' &middot; matches ' + r.P.brandRivals.length + ' equally'
+            : r.P.brandSuggestion ? ' &middot; suggested, not applied' : '') + '</div>';
+
       return '<tr><td><input type="checkbox" ' + (r.P.use ? 'checked' : '') +
-        (r.zero || !r.P.pharmacy || !r.x.ok ? ' disabled' : '') +
+        (r.zero || !r.P.pharmacy || !r.P.brand || !r.x.ok ? ' disabled' : '') +
         ' onchange="ST.packages[' + i + '].use=this.checked;renderPackages()"></td>' +
-        '<td>' + esc(r.P.name) + '</td>' +
+        '<td>' + esc(r.P.name) +
+          (r.P.periodLabel ? '<div class="mut">' + esc(r.P.periodLabel) + '</div>' : '') + '</td>' +
         '<td>' + (r.P.pharmacy ? esc(r.P.pharmacy.trading) +
           '<div class="mut">' + esc(r.P.pharmacy.contact) + '</div>' : '<span class="mut">—</span>') + '</td>' +
+        '<td>' + brandCell + '</td>' +
         '<td class="num">' + r.P.parsed.lines.length + '</td>' +
         '<td class="num">' + M(r.x.gross) + '</td>' +
         '<td class="num">' + M(r.x.invoiceTotal) + '</td>' +
@@ -1784,12 +1830,14 @@ function renderPackages() {
         '<td>' + st + '</td></tr>';
     }).join('') + '</table></div>';
 
-  var ready = billable.length && !broken.length && !unmatched.length;
+  var ready = billable.length && !broken.length && !unmatched.length && !noBrand.length;
   h += '<div class="row" style="margin-top:14px">' +
     '<button class="btn" ' + (ready ? '' : 'disabled') + ' onclick="buildFromPackages()">' +
-    'Use these ' + billable.length + ' sheet(s) &rarr;</button>' +
-    (broken.length ? '<span class="mut">fix the disagreeing sheets first</span>'
+    'Use these ' + billable.length + ' billing block(s) &rarr;</button>' +
+    (broken.length ? '<span class="mut">fix the disagreeing blocks first</span>'
       : unmatched.length ? '<span class="mut">add the missing pharmacies first</span>'
+        : noBrand.length ? '<span class="mut">' + noBrand.length +
+            ' block(s) still need a brand owner &mdash; each one decides who gets paid</span>'
         : !billable.length ? '<span class="mut">nothing billable in this file</span>' : '') +
     '</div></div>';
 
@@ -1797,6 +1845,40 @@ function renderPackages() {
 }
 
 function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* The operator's answer to "whose brand is this block".
+ *
+ * Saved as an alias on the brand owner and appended IN THE DATABASE, so two
+ * blocks confirmed in the same moment cannot overwrite each other - the trap
+ * that lost product aliases for months. Every other block in the file carrying
+ * the same title is answered at the same time, because asking five times for
+ * one answer is not a workflow. */
+function mapBrand(i, code) {
+  if (!requireWrite()) return;
+  var P = ST.packages[i]; if (!P) return;
+  var owner = ST.master.projects.filter(function (o) { return o.code === code; })[0];
+  if (!owner) return;
+  var raw = P.brandRaw || '';
+  if (!raw) {                       // no title to remember; just set this block
+    P.brand = owner; renderPackages(); return;
+  }
+
+  DB.addBrandOwnerAlias(owner.id, raw)
+    .then(function () { return refreshMaster(); })
+    .then(function () {
+      var n = 0;
+      ST.packages.forEach(function (Q) {
+        if (!Q.brand && CB.normKey(Q.brandRaw) === CB.normKey(raw)) {
+          Q.brand = ST.master.projects.filter(function (o) { return o.code === code; })[0] || owner;
+          n++;
+        }
+      });
+      renderPackages();
+      toast('"' + raw + '" → ' + owner.name + ' — saved' +
+        (n > 1 ? ', and applied to ' + n + ' blocks in this file' : ''), 'ok');
+    })
+    .catch(function (e) { toast('Could not save that brand: ' + e.message, 'bad'); });
+}
 
 /* Each package becomes an invoice line: quantity counted, unit price kept, the
  * discount applied by Xero. The brand owner rides on the line because in these
@@ -1808,7 +1890,7 @@ function buildFromPackages() {
   var raw = [], skipped = [];
   ST.packages.forEach(function (P) {
     var x = CB.packageCrossCheck(P.parsed, ST.cfg);
-    if (!P.use || !P.pharmacy || !x.ok || !x.gross) return;
+    if (!P.use || !P.pharmacy || !P.brand || !x.ok || !x.gross) return;
     CB.packageLines(P.parsed).forEach(function (l) {
       raw.push({
         _sheet: P.name, _row: 0,
@@ -1818,9 +1900,11 @@ function buildFromPackages() {
         /* what was inside the packages on this line, so the stock ledger can
            move the single SKUs the bundle is made of */
         parts: l.parts,
-        /* the package name decides the brand owner; `owner` only catches what is
-         * not mapped yet, and strictProduct keeps a near miss from deciding it */
-        projectCode: owner,
+        /* The block's own brand owner, confirmed on the import screen. The
+         * package name still wins where the product is mapped; this is what a
+         * package nobody has mapped yet settles to, and it is now per block
+         * rather than one guess for the whole file. */
+        projectCode: (P.brand ? P.brand.code : owner),
         strictProduct: true
       });
     });
@@ -1838,7 +1922,7 @@ function buildFromPackages() {
         pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
         productRaw: g.pkg,
         qty: g.qty, unitPrice: 0, amount: 0,
-        parts: g.parts, projectCode: owner, strictProduct: true
+        parts: g.parts, projectCode: (P.brand ? P.brand.code : owner), strictProduct: true
       });
     });
 
