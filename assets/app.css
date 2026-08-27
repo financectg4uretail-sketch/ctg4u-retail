@@ -81,7 +81,7 @@ a:hover{color:var(--blue-dk)}
   border-radius:var(--r);
 }
 
-.wrap{padding:0 24px 88px}
+.wrap{padding:0 24px 88px;margin-left:232px}
 
 /* ------------------------------------------------------------------ header */
 
@@ -96,37 +96,41 @@ a:hover{color:var(--blue-dk)}
    icons for exactly this reason. The name now lives in the menu the avatar
    opens, and the period moved into the page header where it belongs - it is a
    parameter of the month being billed, not application chrome. */
-.topbar{background:var(--blue);color:#fff}
+/* With the sections gone to the rail, the bar carries only who and where -
+   so it can be shallower, and fixed, because 48px of chrome that never scrolls
+   away is cheaper than losing your place in a long settlement table. */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:40;
+  background:var(--blue);color:#fff;
+}
 .tb{
-  padding:0 24px;height:56px;
-  display:flex;align-items:center;gap:16px;
+  padding:0 20px;height:48px;
+  display:flex;align-items:center;gap:14px;
 }
 .tb .mark{
-  width:30px;height:30px;border-radius:var(--r-lg);flex:none;display:grid;place-items:center;
-  background:#fff;color:var(--blue-dk);font:700 10.5px var(--sans);letter-spacing:.02em;
+  width:26px;height:26px;border-radius:var(--r);flex:none;display:grid;place-items:center;
+  background:#fff;color:var(--blue-dk);font:700 9.5px var(--sans);letter-spacing:.02em;
 }
-.tb .org{
-  font:600 14px var(--sans);color:#fff;white-space:nowrap;
-  padding-right:16px;border-right:1px solid #ffffff33;
-}
+/* the divider was separating the name from the menu that is no longer beside it */
+.tb .org{font:600 14px var(--sans);color:#fff;white-space:nowrap}
 .tbr{margin-left:auto;display:flex;align-items:center;gap:8px;position:relative}
 
 /* ------------------------------------------------------------- account menu */
 
 .ident{
-  width:32px;height:32px;padding:0;border:0;border-radius:50%;cursor:pointer;
+  width:28px;height:28px;padding:0;border:0;border-radius:50%;cursor:pointer;
   background:transparent;display:grid;place-items:center;
   transition:box-shadow .14s;
 }
 .ident .av{
-  width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
-  background:#fff;color:var(--blue-dk);font:700 12.5px var(--sans);
+  width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+  background:#fff;color:var(--blue-dk);font:700 11.5px var(--sans);
 }
 .ident:hover,.ident.on{box-shadow:0 0 0 2px #ffffff8c}
 .ident:focus-visible{outline:2px solid #fff;outline-offset:2px}
 
 .identmenu{
-  position:absolute;right:0;top:42px;z-index:60;min-width:236px;
+  position:absolute;right:0;top:38px;z-index:60;min-width:236px;
   background:var(--surface);color:var(--tx);
   border:1px solid var(--line);border-radius:var(--r-lg);
   box-shadow:0 10px 28px -8px #1b273336, 0 2px 6px -2px #1b273320;
@@ -139,26 +143,55 @@ a:hover{color:var(--blue-dk)}
 
 /* --------------------------------------------------------------- navigation */
 
-nav{display:flex;align-self:stretch;align-items:stretch}
+/* Ten sections stopped fitting a horizontal bar, and four of them are not
+   peers of the other six at all - they are the four steps of one task. A rail
+   can say that by grouping them, which a row of equal buttons cannot, and it
+   has room to carry how far through the month-end you are. */
+.rail{
+  position:fixed;top:48px;left:0;bottom:0;width:232px;z-index:35;
+  background:var(--surface);border-right:1px solid var(--line);
+  overflow-y:auto;overscroll-behavior:contain;padding-bottom:24px;
+}
+#nav{display:flex;flex-direction:column}
+.rail-g{
+  padding:16px 20px 6px;font:600 10.5px var(--sans);
+  text-transform:uppercase;letter-spacing:.07em;color:var(--tx3);
+}
 nav button{
-  position:relative;background:transparent;border:0;color:#ffffffd9;
-  padding:0 13px;font:500 13.5px var(--sans);cursor:pointer;
-  transition:color .14s,background .14s;white-space:nowrap;
+  position:relative;display:flex;align-items:center;gap:12px;
+  width:100%;height:36px;padding:0 20px;border:0;background:transparent;
+  color:var(--tx);font:500 13.5px var(--sans);cursor:pointer;text-align:left;
+  transition:background .14s,color .14s;
 }
+/* the indicator moves to the leading edge, which is where a vertical list is read */
 nav button::after{
-  content:'';position:absolute;left:7px;right:7px;bottom:0;height:3px;background:#fff;
-  border-radius:2px 2px 0 0;transform:scaleX(0);transition:transform .18s ease;
+  content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;
+  background:var(--blue);border-radius:0 2px 2px 0;
+  transform:scaleX(0);transform-origin:left;transition:transform .18s ease;
 }
-nav button:hover{color:#fff;background:#ffffff1a}
-nav button.on{color:#fff;font-weight:600}
+nav button:hover{background:var(--surface-2)}
+nav button.on{background:var(--blue-tint);color:var(--blue-dk);font-weight:600}
 nav button.on::after{transform:scaleX(1)}
-nav button:focus-visible{outline:2px solid #fff;outline-offset:-3px}
+nav button:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+
+/* How far through the month-end this run is, set by renderSteps() from the same
+   figures the old in-page rail was built from - so there is one answer, in one
+   place, rather than two that can drift. Grey is not-yet-reached. */
+.stp{
+  width:18px;height:18px;flex:none;border-radius:50%;
+  display:grid;place-items:center;
+  font:700 10px var(--sans);background:var(--band);color:var(--tx3);
+  transition:background .18s,color .18s;
+}
+.stp.done{background:var(--ok-tx);color:#fff}
+.stp.now{background:var(--blue);color:#fff;box-shadow:0 0 0 3px #0077c826}
 
 /* ------------------------------------------------------------- page heading */
 
 /* Title, the sentence that says what this page is for, then the period and the
    page's own actions - all on one line, the way a Xero page states itself. */
-header{background:var(--surface);border-bottom:1px solid var(--line);padding:22px 0 20px}
+header{background:var(--surface);border-bottom:1px solid var(--line);padding:22px 0 20px;
+       margin:48px 0 0 232px}
 .hd{
   padding:0 24px;
   display:flex;align-items:center;gap:20px;flex-wrap:wrap;
@@ -499,56 +532,6 @@ details>summary:hover{color:var(--blue-dk)}
 #toast div.ok{border-left-color:var(--ok)}
 #toast div.bad{border-left-color:var(--bad)}
 
-/* ------------------------------------------------------------ progress rail */
-
-/* Four boxes in a row read as four separate things. A month-end run is one
-   thing with four moments, so the rail is continuous and the marker travels
-   along it: a filled dot for done, a ringed dot for where you are, a hollow one
-   for what is still ahead. The connector between them carries the same state,
-   which is what makes it read as progress rather than as tabs. */
-.steps{
-  display:flex;gap:0;margin-bottom:22px;flex-wrap:wrap;
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
-  padding:16px 8px 15px;
-}
-/* The markers get a row of their own above the labels. The first attempt put
-   the dot, the connector and the text on one line, and since the connector has
-   to span the full column it ran straight through "1 - IMPORT" like a strike.
-   A stepper reads top-to-bottom: the rail, then what each stop is called. */
-.steps div{
-  flex:1;min-width:150px;position:relative;padding:24px 16px 0 0;
-  font-size:12px;color:var(--tx3);line-height:1.45;
-}
-.steps b{
-  display:block;font:600 11px var(--sans);text-transform:uppercase;
-  letter-spacing:.06em;margin-bottom:3px;color:var(--tx2);
-}
-/* the dot, top left of its column */
-.steps div::before{
-  content:'';position:absolute;left:0;top:0;width:12px;height:12px;border-radius:50%;
-  background:var(--surface);border:2px solid var(--line-strong);z-index:1;
-  transition:background .18s,border-color .18s,box-shadow .18s;
-}
-/* the rail, from just past this dot to just before the next - centred on the
-   dot, which sits 6px down, so a 2px line starts at 5px */
-.steps div::after{
-  content:'';position:absolute;left:18px;right:8px;top:5px;height:2px;
-  background:var(--line);transition:background .18s;
-}
-.steps div:last-child::after{display:none}
-
-.steps div.done{color:var(--tx2)}
-.steps div.done b{color:var(--ok-tx)}
-.steps div.done::before{background:var(--ok-tx);border-color:var(--ok-tx)}
-.steps div.done::after{background:var(--ok-tx)}
-
-.steps div.now{color:var(--tx)}
-.steps div.now b{color:var(--blue-dk)}
-.steps div.now::before{
-  background:var(--blue);border-color:var(--blue);
-  box-shadow:0 0 0 4px #0077c826;
-}
-
 /* ------------------------------------------------------------- write access */
 
 .ro-only{display:none}
@@ -561,21 +544,37 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
    of the page line up. */
 @media (max-width:1180px){
   .tb{gap:12px}
-  nav{overflow-x:auto;scrollbar-width:none}
-  nav::-webkit-scrollbar{display:none}
-  nav button{padding:0 11px}
+  .rail{width:200px}
+  header,.wrap{margin-left:200px}
+  nav button{padding:0 16px;gap:10px}
+  .rail-g{padding-left:16px;padding-right:16px}
+}
+/* Below this the rail costs more width than it earns, so it lies down and
+   becomes the row it used to be - scrolling sideways rather than wrapping, so
+   the height of the chrome stays fixed and the page below it still lines up. */
+@media (max-width:860px){
+  .rail{
+    position:static;width:auto;margin-top:48px;bottom:auto;
+    border-right:0;border-bottom:1px solid var(--line);padding-bottom:0;
+    overflow-x:auto;scrollbar-width:none;
+  }
+  .rail::-webkit-scrollbar{display:none}
+  #nav{flex-direction:row;align-items:stretch}
+  .rail-g{display:none}
+  nav button{width:auto;white-space:nowrap;height:44px;padding:0 14px}
+  nav button::after{left:7px;right:7px;top:auto;bottom:0;width:auto;height:3px;border-radius:2px 2px 0 0}
+  header{margin:0}
+  .wrap{margin-left:0}
 }
 @media (max-width:720px){
   .wrap,.hd,.tb{padding-left:15px;padding-right:15px}
-  .tb .org{font-size:13px;padding-right:12px}
+  .tb .org{font-size:13px}
   .hd{gap:14px}
   .hd h1{font-size:21px}
   .hd .sub{font-size:12.5px}
   .card{--cardpad:16px;padding-top:16px;padding-bottom:16px}
   .kpi .v{font-size:20px}
   button.btn{padding:0 13px}
-  .steps{padding:14px 4px}
-  .steps div{min-width:132px;padding-left:30px}
 }
 
 @media (prefers-reduced-motion:reduce){

@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=ad9e41c459">
+<link rel="stylesheet" href="assets/app.css?v=38c21fd02b">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -27,18 +27,6 @@
   <div class="tb">
     <span class="mark" aria-hidden="true">CRS</span>
     <span class="org">CTG4U RETAIL SDN BHD</span>
-    <nav id="nav" aria-label="Main">
-      <button data-p="dash">Dashboard</button>
-      <button data-p="import" class="on">Import</button>
-      <button data-p="review">Review</button>
-      <button data-p="settle">Settlement</button>
-      <button data-p="out">Outputs</button>
-      <button data-p="runs">History</button>
-      <button data-p="stock">Stock</button>
-      <button data-p="master">Contacts</button>
-      <button data-p="cfg">Settings</button>
-      <button data-p="users" id="navUsers" style="display:none">Access</button>
-    </nav>
     <!-- Only the avatar rides the rail. The name and role live in the menu it
          opens, because spelling them out cost about 230px and pushed the whole
          right-hand group onto a second row - which is what Xero avoids by
@@ -56,6 +44,33 @@
     </div>
   </div>
 </div>
+
+<!-- Ten sections stopped fitting a horizontal bar, and four of them are not
+     peers of the other six at all: they are the four steps of one task. A rail
+     can say that by grouping them, which a row of equal buttons cannot, and it
+     has the room to carry how far through the month-end the run is - so the
+     operator can see that without opening a page. -->
+<aside class="rail">
+  <nav id="nav" aria-label="Main">
+    <div class="rail-g">Overview</div>
+    <button data-p="dash">Dashboard</button>
+
+    <div class="rail-g" id="railRun">Month-end run</div>
+    <button data-p="import" class="on"><span class="stp" data-step="import">1</span>Import</button>
+    <button data-p="review"><span class="stp" data-step="review">2</span>Review</button>
+    <button data-p="settle"><span class="stp" data-step="settle">3</span>Settlement</button>
+    <button data-p="out"><span class="stp" data-step="out">4</span>Outputs</button>
+
+    <div class="rail-g">Records</div>
+    <button data-p="runs">History</button>
+    <button data-p="stock">Stock</button>
+    <button data-p="master">Contacts</button>
+
+    <div class="rail-g">Admin</div>
+    <button data-p="cfg">Settings</button>
+    <button data-p="users" id="navUsers" style="display:none">Access</button>
+  </nav>
+</aside>
 
 <header>
   <div class="hd">
@@ -93,7 +108,6 @@
 
 <!-- ============================================================ IMPORT -->
 <section class="panel on" id="p-import">
-  <div class="steps" id="steps"></div>
 
   <div class="card">
     <h2>Drop the monthly sold-out list</h2>
@@ -314,7 +328,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'c4733ed3a0ab';
+  var MINE = '408d2d828b2e';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1498,19 +1512,42 @@ function renderDash() {
   });
 }
 
+/* How far through the month-end this run is.
+ *
+ * The same four questions the in-page rail used to answer, now answered on the
+ * navigation itself - so it is visible from every page rather than only from
+ * the four it described. There is still exactly ONE place that decides, which
+ * is the point: two progress indicators drift, and then neither can be trusted.
+ *
+ * The detail line the old rail printed has nowhere to go on an 18px badge, so
+ * it moves to the button's title. That keeps "3 row(s) need attention"
+ * reachable instead of deleting it, which is the part of the old rail actually
+ * worth missing. */
 function renderSteps() {
   var n = ST.lines.length;
   var issues = ST.lines.filter(function (l) { return l.issues.length; }).length;
   var st = [
-    { t: 'Import', d: ST.sheets.length ? ST.sheets.length + ' sheet(s) read' : 'waiting for a file', ok: !!ST.sheets.length },
-    { t: 'Map', d: n ? (issues ? issues + ' row(s) need attention' : 'all rows resolved') : '-', ok: n > 0 && !issues },
-    { t: 'Settle', d: ST.settlement ? ST.settlement.projects.length + ' brand owner(s)' : '-', ok: !!(ST.settlement && ST.settlement.projects.length) },
-    { t: 'Output', d: ST.settlement ? 'ready' : '-', ok: !!(ST.settlement && ST.settlement.projects.length && !issues) }
+    { k: 'import', t: 'Import', d: ST.sheets.length ? ST.sheets.length + ' sheet(s) read' : 'waiting for a file', ok: !!ST.sheets.length },
+    { k: 'review', t: 'Review', d: n ? (issues ? issues + ' row(s) need attention' : 'all ' + n + ' rows resolved') : 'nothing imported yet', ok: n > 0 && !issues },
+    { k: 'settle', t: 'Settlement', d: ST.settlement && ST.settlement.projects.length ? ST.settlement.projects.length + ' brand owner(s)' : 'nothing to settle yet', ok: !!(ST.settlement && ST.settlement.projects.length) },
+    { k: 'out', t: 'Outputs', d: ST.settlement && ST.settlement.projects.length && !issues ? 'ready to finalise' : 'not ready', ok: !!(ST.settlement && ST.settlement.projects.length && !issues) }
   ];
   var cur = st.findIndex(function (s) { return !s.ok; });
-  $('#steps').innerHTML = st.map(function (s, i) {
-    return '<div class="' + (s.ok ? 'done' : (i === cur ? 'now' : '')) + '"><b>' + (s.ok ? '✓ ' : (i + 1) + ' · ') + esc(s.t) + '</b>' + esc(s.d) + '</div>';
-  }).join('');
+  /* A step cannot be finished while an earlier one is not.
+     Each test is independent - settlement has brand owners the moment ONE row
+     resolves, whether or not the rest did - and shown side by side as 1-2-3-4
+     that read as step three being done while step two was still in progress.
+     The finalise gate already refuses on any unresolved row, so this only makes
+     the rail say what the button behind it will do. */
+  st.forEach(function (s, i) {
+    if (cur >= 0 && i > cur) s.ok = false;
+    var b = document.querySelector('.stp[data-step="' + s.k + '"]');
+    if (!b) return;
+    b.className = 'stp' + (s.ok ? ' done' : (i === cur ? ' now' : ''));
+    b.textContent = s.ok ? '\u2713' : String(i + 1);
+    var btn = b.parentNode;
+    if (btn) btn.title = s.t + ' — ' + s.d;
+  });
 }
 
 /* ============================================================= IMPORT */
