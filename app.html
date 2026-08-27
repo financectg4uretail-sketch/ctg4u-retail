@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=38c21fd02b">
+<link rel="stylesheet" href="assets/app.css?v=cc1604795f">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -118,6 +118,7 @@
       <b>Drop the file here, or click to choose</b>
       <span class="mut">.xlsx, .xls or .csv</span>
     </div>
+  <div id="readState"></div>
     <input type="file" id="file" accept=".xlsx,.xls,.csv" multiple hidden>
   </div>
   <div id="packages"></div>
@@ -292,6 +293,17 @@
     <div class="hint" style="margin:10px 0 0">Master data, settings and every finalised run live in the shared
       database, so your colleagues see the same figures and a new laptop needs no setup. The export is a
       point-in-time copy for your own records &mdash; importing it merges rows back in, it never wipes anything.</div>
+
+    <h2 style="margin-top:18px">Full backup</h2>
+    <div class="row">
+      <button class="btn sm" onclick="backupAll()">⬇ Download a full backup (json)</button>
+      <span id="backupState" class="mut"></span>
+    </div>
+    <div class="hint" style="margin:10px 0 0">The export above is the master data only &mdash; the part somebody
+      typed. This one is everything: every run, every invoice and settlement number issued, every stock movement
+      and delivery order, and the audit trail. It exists because all of that lives in one database reached through
+      one account, and none of it could be retyped. Keep a copy somewhere else, monthly, once you have finalised.
+      Xero credentials are never included.</div>
   </div>
 </section>
 
@@ -306,9 +318,8 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=04b572bf88"></script>
-<script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=2609a9fe89"></script>
+<script src="assets/db.js?v=3dfa2c89cd"></script>
+<script src="assets/calc.js?v=a1a4140184"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -329,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '7d32af038674';
+  var MINE = '382d03f303af';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -474,6 +485,47 @@ var PAGE = {
   users:  ['Access', 'Who can see this, and what they may do', '']
 };
 
+/* The spreadsheet library is 951 KB - more of this page's weight than
+ * everything else put together - and nothing at boot touches it. Signing in,
+ * the dashboard, runs, stock, settlement, settings and the whole read side of
+ * the app never open a workbook. So it is fetched the first time something
+ * actually needs one, and cached by the browser after that.
+ *
+ * The wait is hidden rather than merely tolerated: opening any page with a
+ * workbook control starts the fetch, which is a tab switch and usually a file
+ * dialog ahead of the file arriving. If a file does beat it, needXLSX() is the
+ * same promise either way and the read simply waits for it. */
+var XLSX_LOADING = null;
+function needXLSX() {
+  if (window.XLSX) return Promise.resolve();
+  if (!XLSX_LOADING) {
+    XLSX_LOADING = new Promise(function (ok, no) {
+      var el = document.createElement('script');
+      /* Double-quoted on purpose. build-dist.js stamps every asset URL with a
+         hash of its contents by replacing the exact text "assets/x" - quotes
+         included - so a single-quoted reference here would ship unstamped and
+         the CDN could hand back a cached copy indefinitely. The build refuses
+         if this stops matching, so the coupling cannot rot in silence. */
+      el.src = "assets/xlsx.full.min.js?v=56e27b479a";
+      el.onload = function () { ok(); };
+      el.onerror = function () {
+        /* cleared, so a second attempt is a real second attempt and not a
+           permanently rejected promise handed back for the rest of the session */
+        XLSX_LOADING = null;
+        no(new Error('Could not load the spreadsheet reader — check the connection and try again'));
+      };
+      document.head.appendChild(el);
+    });
+  }
+  return XLSX_LOADING;
+}
+
+/* Read a dropped or chosen workbook, once there is something to read it with. */
+function readBuf(r, f) {
+  needXLSX().then(function () { r.readAsArrayBuffer(f); },
+                  function (e) { toast(e.message, 'bad'); say(''); });
+}
+
 function go(p) {
   document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('on', b.dataset.p === p); });
   document.querySelectorAll('.panel').forEach(function (s) { s.classList.toggle('on', s.id === 'p-' + p); });
@@ -489,6 +541,9 @@ function go(p) {
     var pb = $('header .periodbox');
     if (pb) pb.style.display = PERIOD_PAGES.indexOf(p) < 0 ? 'none' : '';
   }
+  /* every page that reads or writes a workbook, so the fetch is already
+     running while the file dialog is still open */
+  if (p === 'import' || p === 'master' || p === 'out') needXLSX().catch(function () {});
   if (p === 'dash') renderDash();
   if (p === 'review') renderReview();
   if (p === 'stock') stockView(STOCK.view || 'on');
@@ -500,8 +555,6 @@ function go(p) {
   if (p === 'users') renderUsers();
   window.scrollTo(0, 0);
 }
-
-/* ========================================================= DASHBOARD */
 
 /* ========================================================= DASHBOARD */
 
@@ -1563,6 +1616,12 @@ drop.onclick = function () { $('#file').click(); };
 drop.addEventListener('drop', function (e) { handleFiles(e.dataTransfer.files); });
 $('#file').onchange = function (e) { handleFiles(e.target.files); };
 
+/* A line above the drop zone, so the wait has somewhere to appear. */
+function say(html) {
+  var el = $('#readState'); if (!el) return;
+  el.innerHTML = html ? '<div class="note">' + html + '</div>' : '';
+}
+
 function handleFiles(files) {
   ST.packages = [];
   if (!files || !files.length) return;
@@ -1586,15 +1645,23 @@ function handleFiles(files) {
     names.push(f.name);
     var r = new FileReader();
     r.onload = function () {
-      try { readWorkbook(f.name, r.result); }
-      catch (err) { toast('Could not read ' + f.name + ': ' + err.message, 'bad'); }
-      if (--pending === 0) finished();
+      /* Parsing this workbook takes about a second and a half - 74 tabs, 115
+         billing blocks - and it is synchronous, so the page is frozen for all
+         of it. Silence there reads as "nothing happened", and the natural
+         response is to drop the file again. Say what is happening first, give
+         the browser a turn to paint it, and only then block. */
+      say('Reading ' + f.name + '&hellip;');
+      setTimeout(function () {
+        try { readWorkbook(f.name, r.result); }
+        catch (err) { toast('Could not read ' + f.name + ': ' + err.message, 'bad'); }
+        if (--pending === 0) { say(''); finished(); }
+      }, 30);
     };
     r.onerror = function () {
       toast('Could not open ' + f.name, 'bad');
       if (--pending === 0) finished();
     };
-    r.readAsArrayBuffer(f);
+    readBuf(r, f);
   });
 }
 
@@ -1620,12 +1687,13 @@ function readWorkbook(fname, buf) {
          brands. Resolved once, so five blocks cannot reach five different
          answers about whose shop this is. */
       var id = blocks[0];
-      var m = id.pharmacyContact
-        ? CB.bestMatch(id.pharmacyContact, ST.master.pharmacies, ['contact', 'trading', 'code'], 0.72)
-        : null;
-      if (!m) m = CB.bestMatch(id.pharmacyTrading || sn, ST.master.pharmacies, ['trading', 'contact', 'code'], 0.7);
-      var how = m ? (id.pharmacyContact && CB.similarity(id.pharmacyContact, m.item.contact) >= 0.9
-        ? 'registered name' : 'trading name') : null;
+      /* Both names, weighed against each other - see CB.pickPharmacy. The
+         registered name used to win outright, which billed four UNICARE
+         branches to two wrong companies because the branch suffix is the part
+         a pharmacy leaves out of its own letterhead. */
+      var got = CB.pickPharmacy(id.pharmacyContact, id.pharmacyTrading || sn, ST.master.pharmacies);
+      var m = got.pharmacy ? { item: got.pharmacy } : null;
+      var how = got.how;
 
       blocks.forEach(function (parsed) {
         var bm = parsed.brand ? CB.matchBrandOwner(parsed.brand, ST.master.projects) : null;
@@ -1638,6 +1706,9 @@ function readWorkbook(fname, buf) {
           brandScore: bm ? bm.score : 0,
           brandRivals: (bm && bm.rivals > 1) ? bm.tied : null,
           pharmacy: m ? m.item : null, matchedOn: how,
+          /* set only when the two names pointed at different records and
+             neither was clearly better - the screen names both and stops */
+          pharmacyRivals: got.rivals,
           use: true
         });
       });
@@ -1679,13 +1750,25 @@ function renderPackages() {
     return { P: P, x: x, sk: sk, zero: zero };
   });
 
+  /* Checked on the BATCH, because neither of these can be seen in a single
+     block or caught downstream: a block counted twice doubles both sides of the
+     cross-check and still balances, and a period nobody compared produces a
+     complete month dated to the wrong one. */
+  var batch = CB.blockWarnings(ST.packages, ST.cfg);
+
   var billable = rowsOut.filter(function (r) { return !r.zero && r.P.use; });
   /* A block with no brand owner cannot be settled to anybody, so it cannot be
      billed either - the pharmacy would be invoiced for goods with no owner.
      Same gate as an unmatched pharmacy, for the same reason. */
   var noBrand = rowsOut.filter(function (r) { return !r.zero && !r.P.brand; });
   var zeroes = rowsOut.filter(function (r) { return r.zero; });
-  var unmatched = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy; });
+  /* Two different faults, and telling them apart is the whole point. A sheet
+     naming a shop nobody has heard of needs a record adding. A sheet whose two
+     names point at two EXISTING records needs somebody to say which - and if
+     that is presented as "not in the master", the operator adds a duplicate
+     pharmacy and the wrong one starts winning. */
+  var undecided = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy && r.P.pharmacyRivals; });
+  var unmatched = rowsOut.filter(function (r) { return !r.zero && !r.P.pharmacy && !r.P.pharmacyRivals; });
   var broken = rowsOut.filter(function (r) { return !r.zero && !r.x.ok; });
   var noted = rowsOut.filter(function (r) { return !r.zero && r.x.notes.length; });
   /* Only worth raising where the sheet actually carries a Stock Out block to
@@ -1703,7 +1786,29 @@ function renderPackages() {
   var gross = CB.sumMoney(billable, function (r) { return r.x.gross; });
   var invoice = CB.sumMoney(billable, function (r) { return r.x.invoiceTotal; });
 
-  var h = '<div class="card"><h2>Pharmacy billing sheets</h2>' +
+  var h = '';
+  var BATCH_TITLE = {
+    duplicate: 'The same sales appear twice.',
+    period: 'Wrong period.',
+    rate: 'Settings and the sheets disagree on a rate.'
+  };
+  batch.forEach(function (w) {
+    h += '<div class="note bad"><b>' + (BATCH_TITLE[w.kind] || 'Check this file.') +
+      '</b> ' + esc(w.text) +
+      (w.suggest
+        ? ' <button class="btn sm" style="margin-left:8px" onclick="usePeriod(&#39;' +
+          esc(w.suggest) + '&#39;)">Bill it as ' + esc(CB.periodLabel(w.suggest)) + '</button>'
+        : '') +
+      (w.setting
+        ? ' <button class="btn sm" style="margin-left:8px" onclick="useRate(&#39;' +
+          esc(w.setting) + '&#39;,' + (+w.value) + ',&#39;' + esc(w.label) + '&#39;,' +
+          (w.movesMoney ? 'true' : 'false') + ')">Set ' + esc(w.label) + ' to ' +
+          esc(CB.r2(w.value)) + '%</button>'
+        : '') +
+      '</div>';
+  });
+
+  h += '<div class="card"><h2>Pharmacy billing sheets</h2>' +
     '<div class="hint">One tab per pharmacy, one row per package sold. Each sheet states its own ' +
     'Total Sales and Billing, and those are held against what this reads &mdash; a sheet whose figures ' +
     'disagree is not billed.</div>' +
@@ -1729,8 +1834,8 @@ function renderPackages() {
     kpi('Gross sales', M(gross)) +
     kpi('Invoice total', M(invoice), 'accent') +
     kpi('Nothing sold', String(zeroes.length)) +
-    kpi('Need attention', String(unmatched.length + broken.length),
-      (unmatched.length + broken.length) ? 'accent' : '') +
+    kpi('Need attention', String(unmatched.length + undecided.length + broken.length),
+      (unmatched.length + undecided.length + broken.length) ? 'accent' : '') +
     '</div>';
 
   if (broken.length) {
@@ -1762,6 +1867,21 @@ function renderPackages() {
     h += '<div class="note"><b>' + noStockBlock.length + ' sheet(s) carry no Stock Out summary.</b> ' +
       'Their stock still moves &mdash; it is read from the product columns &mdash; but there is nothing ' +
       'on the sheet to check that reading against.</div>';
+  }
+
+  if (undecided.length) {
+    h += '<div class="note bad"><b>' + undecided.length + ' sheet(s) name two different pharmacies.</b> ' +
+      'The registered name written on the sheet and the name of the tab point at different records, ' +
+      'and neither is clearly right. Pick one, or give the branch its own registered name on the ' +
+      'Master data tab so the sheet can only mean one of them.' +
+      '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
+      '<tr><th>Sheet</th><th>Registered name on the sheet</th><th>Could be</th><th class="num">Gross</th></tr>' +
+      undecided.map(function (r) {
+        return '<tr class="bad"><td>' + esc(r.P.name) + '</td><td>' +
+          esc(r.P.parsed.pharmacyContact || '\u2014') + '</td><td>' +
+          r.P.pharmacyRivals.map(function (x) { return esc(x.code + ' ' + (x.trading || x.contact)); }).join('<br>') +
+          '</td><td class="num">' + M(r.x.gross) + '</td></tr>';
+      }).join('') + '</table></div></div>';
   }
 
   if (unmatched.length) {
@@ -1831,13 +1951,24 @@ function renderPackages() {
         '<td>' + st + '</td></tr>';
     }).join('') + '</table></div>';
 
-  var ready = billable.length && !broken.length && !unmatched.length && !noBrand.length;
+  /* A duplicate is not a warning to read past: it doubles a month's invoices,
+     and no check after this point can see it. The period mismatch is allowed
+     through on purpose - a late file legitimately gets billed in a later month
+     sometimes - but it is said loudly first. */
+  var ready = billable.length && !broken.length && !unmatched.length && !undecided.length && !noBrand.length &&
+    !batch.some(function (w) { return w.kind === 'duplicate'; });
   h += '<div class="row" style="margin-top:14px">' +
     '<button class="btn" ' + (ready ? '' : 'disabled') + ' onclick="buildFromPackages()">' +
     'Use these ' + billable.length + ' billing block(s) &rarr;</button>' +
-    (broken.length ? '<span class="mut">fix the disagreeing blocks first</span>'
+    /* Named in order of how much damage each does. A duplicate bills a month
+       twice and nothing downstream can see it; the others merely hold rows
+       back. So it is said first even when several are true at once. */
+    (batch.some(function (w) { return w.kind === 'duplicate'; })
+        ? '<span class="mut">the same sales are in here twice &mdash; remove the duplicate file</span>'
+      : broken.length ? '<span class="mut">fix the disagreeing blocks first</span>'
+      : undecided.length ? '<span class="mut">say which pharmacy those sheets belong to first</span>'
       : unmatched.length ? '<span class="mut">add the missing pharmacies first</span>'
-        : noBrand.length ? '<span class="mut">' + noBrand.length +
+      : noBrand.length ? '<span class="mut">' + noBrand.length +
             ' block(s) still need a brand owner &mdash; each one decides who gets paid</span>'
         : !billable.length ? '<span class="mut">nothing billable in this file</span>' : '') +
     '</div></div>';
@@ -1846,6 +1977,35 @@ function renderPackages() {
 }
 
 function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* Take the rate the sheets state.
+ *
+ * Asked for out loud when it changes money, because the commission rate is the
+ * one that decides what every pharmacy is charged. The insurance rate does not:
+ * with `deductInsurance` off - which is how this business runs - the fee is
+ * hard-zero whatever the rate says, and the rate's only remaining job is to
+ * recognise the Insurans line the sheets print. */
+function useRate(key, value, label, movesMoney) {
+  if (!requireWrite()) return;
+  var NL = String.fromCharCode(10);
+  if (movesMoney && !confirm('Set the ' + label + ' rate to ' + CB.r2(value) + '%?' + NL + NL +
+    'This changes what every pharmacy is charged and what every brand owner is paid. ' +
+    'Only do it if the sheets are right and the setting is out of date.')) return;
+
+  ST.cfg[key] = value;
+  save(); recompute(); renderPackages(); renderRateWarnings();
+  toast('The ' + label + ' rate is now ' + CB.r2(value) + '%', 'ok');
+  DB.audit('rate_taken_from_sheets', { setting: key, value: value });
+}
+
+/* Bill the month the sheets actually say they cover. */
+function usePeriod(p) {
+  if (!requireWrite()) return;
+  ST.cfg.period = p;
+  var el = $('#period'); if (el) el.value = p;
+  save(); recompute(); renderPackages(); renderRateWarnings();
+  toast('Now billing ' + CB.periodLabel(p), 'ok');
+}
 
 /* The operator's answer to "whose brand is this block".
  *
@@ -2315,12 +2475,16 @@ function saveDelivery() {
  * Kept inline under the row rather than on a screen of its own, because the
  * question is always asked about a line the operator is already looking at. */
 var LEDGER_OPEN = null;
+/* which pharmacy and product the open ledger belongs to - the correction form
+   reads this rather than trusting ids baked into markup that may have been
+   redrawn underneath it */
+var LEDGER_AT = null;
 
 function toggleLedger(pharmacyId, productId, key) {
   var host = document.getElementById('led-' + key);
   if (!host) return;
   if (LEDGER_OPEN === key) {
-    host.innerHTML = ''; host.style.display = 'none'; LEDGER_OPEN = null;
+    host.innerHTML = ''; host.style.display = 'none'; LEDGER_OPEN = null; LEDGER_AT = null;
     return;
   }
   /* one open at a time: two expanded ledgers push the table around and the
@@ -2330,12 +2494,15 @@ function toggleLedger(pharmacyId, productId, key) {
     if (prev) { prev.innerHTML = ''; prev.style.display = 'none'; }
   }
   LEDGER_OPEN = key;
+  /* which shelf this ledger is of, so the correction form below it cannot be
+     applied to a different one after a redraw */
+  LEDGER_AT = { pharmacy: pharmacyId, product: productId, key: key };
   host.style.display = '';
   host.innerHTML = '<td colspan="12"><div class="hint">Loading the movements&hellip;</div></td>';
 
   DB.stock.ledger(pharmacyId, productId).then(function (rows) {
     if (LEDGER_OPEN !== key) return;
-    host.innerHTML = '<td colspan="12">' + ledgerHTML(rows) + '</td>';
+    host.innerHTML = '<td colspan="12">' + ledgerHTML(rows, key) + '</td>';
   }, function (e) {
     host.innerHTML = '<td colspan="12"><div class="note warn">Could not read the movements: ' +
       esc(e.message || String(e)) + '</div></td>';
@@ -2352,10 +2519,88 @@ var LEDGER_WORD = {
   adjustment: ['Adjustment', 'warn']
 };
 
-function ledgerHTML(rows) {
+/* Correcting a shelf, from the one screen that shows what it says now.
+ *
+ * "Opening + in - out +/- adjustments = closing" is printed on the movement
+ * report, the stock-on-hand reconciliation and the CSV export - and until now
+ * that column could only ever be zero, because stock_move() was reachable from
+ * the database, from db.js, and from nowhere a person could press. After a
+ * physical count the operator had no way to say what the count actually was.
+ *
+ * Deliberately here rather than on a form of its own: an adjustment is a claim
+ * about one product at one pharmacy, and the number it is correcting should be
+ * on screen while it is made. A blank form invites adjusting the wrong shelf.
+ *
+ * A reason is required. An unexplained adjustment is indistinguishable from an
+ * error next month, and this is the one movement with no document behind it. */
+function adjustHTML(rows, key) {
+  if (!CAN_WRITE) return '';
+  var bal = rows.length ? +rows[rows.length - 1].running : 0;
+  return '<div class="row" style="margin-top:10px;align-items:flex-end;gap:8px;flex-wrap:wrap">' +
+    '<label style="margin:0"><span class="mut" style="display:block;font-size:12px">Counted</span>' +
+    '<input id="adjTo-' + esc(key) + '" type="number" step="any" style="width:110px" ' +
+    'placeholder="' + CB.r2(bal) + '"></label>' +
+    '<label style="margin:0;flex:1;min-width:190px"><span class="mut" style="display:block;font-size:12px">Why</span>' +
+    '<input id="adjWhy-' + esc(key) + '" type="text" placeholder="stocktake 31 Jul, two damaged"></label>' +
+    '<button class="btn sm ghost" onclick="applyAdjust(&#39;' + esc(key) + '&#39;,' + CB.r2(bal) + ')">' +
+    'Adjust to counted</button>' +
+    '<span class="mut" style="font-size:12px">records the difference, not the total</span>' +
+    '</div>';
+}
+
+/* The operator types what they counted; the ledger stores the difference.
+ *
+ * Asking for the delta instead would mean doing the subtraction in your head
+ * against a number three rows up, and getting the sign wrong there writes a
+ * correction twice the size of the error in the wrong direction. */
+function applyAdjust(key, wasBalance) {
+  if (!requireWrite()) return;
+  if (!LEDGER_AT || LEDGER_AT.key !== key) {
+    toast('That row was redrawn — open it again and re-enter the count', 'warn');
+    return;
+  }
+  var toEl = $('#adjTo-' + key), whyEl = $('#adjWhy-' + key);
+  var raw = toEl ? String(toEl.value).trim() : '';
+  var why = whyEl ? String(whyEl.value).trim() : '';
+
+  if (raw === '') { toast('Enter what was counted', 'warn'); if (toEl) toEl.focus(); return; }
+  var counted = CB.num(raw);
+  if (!isFinite(counted)) { toast('That count is not a number', 'warn'); return; }
+  if (!why) { toast('Say why — an adjustment with no reason cannot be told from a mistake later', 'warn');
+    if (whyEl) whyEl.focus(); return; }
+
+  var delta = CB.r2(counted - wasBalance);
+  if (!delta) { toast('The count already matches the balance — nothing to adjust', 'ok'); return; }
+
+  var NL = String.fromCharCode(10);
+  if (!confirm('Adjust this shelf from ' + CB.r2(wasBalance) + ' to ' + CB.r2(counted) + '?' + NL + NL +
+    'That writes a movement of ' + (delta > 0 ? '+' : '') + CB.r2(delta) + '.' + NL +
+    'Reason: ' + why + NL + NL +
+    'Adjustments show separately on the movement report; they never touch a run or an invoice.')) return;
+
+  DB.stock.move(LEDGER_AT.pharmacy, LEDGER_AT.product, CB.monthEnd(ST.cfg.period),
+                delta, 'adjustment', why)
+    .then(function () {
+      toast('Adjusted by ' + (delta > 0 ? '+' : '') + CB.r2(delta) + '. The shelf now reads ' +
+        CB.r2(counted) + '.', 'ok');
+      return DB.audit('stock_adjusted', {
+        pharmacy: LEDGER_AT.pharmacy, product: LEDGER_AT.product,
+        from: wasBalance, to: counted, delta: delta, note: why
+      });
+    })
+    .then(function () {
+      /* redraw the whole view: the balance on the row above changed too, and a
+         corrected ledger sitting under a stale total is worse than neither */
+      LEDGER_OPEN = null; LEDGER_AT = null;
+      renderStock();
+    })
+    .catch(err);
+}
+
+function ledgerHTML(rows, key) {
   if (!rows.length) {
     return '<div class="hint" style="padding:10px 0">Nothing has moved for this product at ' +
-      'this pharmacy.</div>';
+      'this pharmacy.</div>' + adjustHTML(rows, key);
   }
   return '<div style="padding:4px 0 10px">' +
     '<table style="font-size:12.5px"><tr><th>Date</th><th>What happened</th>' +
@@ -2374,7 +2619,8 @@ function ledgerHTML(rows) {
         '<td class="mut">' + esc(r.who || '') + '</td></tr>';
     }).join('') + '</table>' +
     '<div class="hint" style="margin-top:7px">' + rows.length + ' movement(s). The balance ' +
-    'column is the running total, so the last one is what the row above says.</div></div>';
+    'column is the running total, so the last one is what the row above says.</div>' +
+    adjustHTML(rows, key) + '</div>';
 }
 
 /* ------------------------------------------- the monthly promotion workbook */
@@ -2483,7 +2729,7 @@ $('#filePromo').onchange = function (e) {
       drawPromoPreview();
     } catch (e2) { toast('Could not read that file: ' + e2.message, 'bad'); }
   };
-  r.readAsArrayBuffer(f);
+  readBuf(r, f);
   e.target.value = '';
 };
 
@@ -2976,7 +3222,7 @@ $('#fileBundles').onchange = function (e) {
       }).then(refreshMaster).then(renderBundles, err);
     } catch (e2) { toast('Could not read that file: ' + e2.message, 'bad'); }
   };
-  r.readAsArrayBuffer(f);
+  readBuf(r, f);
   e.target.value = '';
 };
 
@@ -3124,8 +3370,11 @@ function drawStock() {
 
   /* The table is new, so nothing is expanded in it. Without this the flag still
      names a row from the render before, and the first click on that row takes
-     the close branch and appears to do nothing at all. */
+     the close branch and appears to do nothing at all. LEDGER_AT goes with it:
+     an adjustment form left holding the previous render's pharmacy and product
+     would write the correction onto the wrong shelf. */
   LEDGER_OPEN = null;
+  LEDGER_AT = null;
   body.innerHTML = h;
 }
 
@@ -3773,6 +4022,7 @@ function printStatement(idx) {
 
 /* --------------------------------------------------------- workbook */
 function dlWorkbook() {
+  if (!window.XLSX) { needXLSX().then(dlWorkbook, err); return; }
   /* This builds the three Xero tables too, so it refuses for the same reason
      the downloads do - and a button that throws into the console while the
      page carries on is the least useful way to say so. */
@@ -3951,7 +4201,7 @@ $('#fileXeroContacts').onchange = function (e) {
       renderXeroContacts();
     } catch (err) { toast('Could not read that file: ' + err.message, 'bad'); }
   };
-  r.readAsArrayBuffer(f);
+  readBuf(r, f);
   e.target.value = '';
 };
 
@@ -4121,6 +4371,7 @@ function addBrandOwnerFromXero() {
 }
 
 function exportMaster() {
+  if (!window.XLSX) { needXLSX().then(exportMaster, err); return; }
   var wb = XLSX.utils.book_new();
   var s = function (n, cols, arr) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cols].concat(arr)), n);
@@ -4265,7 +4516,7 @@ $('#fileMaster').onchange = function (e) {
         .catch(function (e) { toast('Import failed: ' + e.message, 'bad'); });
     } catch (err) { toast('Import failed: ' + err.message, 'bad'); }
   };
-  r.readAsArrayBuffer(f);
+  readBuf(r, f);
   e.target.value = '';
 };
 
@@ -4397,7 +4648,18 @@ var CFG_FIELDS = {
     ['sstPct', 'SST %', 'Applied to the two fees above', 'number'],
     ['sstOnMgmtFee', 'SST on management fee', 'Include it in the SST base', 'bool'],
     ['sstOnServiceFee', 'SST on service fee', 'Include it in the SST base', 'bool'],
-    ['insuranceFeePct', 'Insurance % of gross sales', 'Zero, so it is not deducted. The Insurans line on the pharmacy sheets is shown to the pharmacy either way. Set a rate here only if a contract charges it to the brand owner', 'number'],
+    /* Two settings, one rate, and getting the division wrong stopped a whole
+       month. The help here used to read "Zero, so it is not deducted", which is
+       an instruction to zero it - and `deductInsurance`, the control that
+       actually stops the deduction, was not on this screen at all. So somebody
+       did the only thing they could reach.
+       The rate has a second job: the pharmacy sheets print an Insurans line and
+       packageCrossCheck reads this to confirm it is looking at the same
+       arrangement. Zeroed, it disagreed with all 72 sheets in the July file and
+       refused every one of them. Both are shown now, and the wording says which
+       does what. */
+    ['insuranceFeePct', 'Insurance % the pharmacy sheets state', 'What the Insurans line on their sheets says — 0.8%. This is how a sheet is recognised as the right arrangement; it does not decide whether anyone pays it. Do not zero it to stop the deduction, or every sheet will be refused', 'number'],
+    ['deductInsurance', 'Deduct insurance from the payout', 'This is the switch. Off means the brand owner is not charged it, whatever the rate above says', 'bool'],
     ['sstOnInsurance', 'SST on insurance', 'Off by default: insurance is not a taxable service', 'bool']
   ],
   xero: [
@@ -4415,7 +4677,17 @@ var CFG_FIELDS = {
     ['deliveryOrderPrefix', 'Delivery order prefix', 'Numbers the delivery notes', 'text'],
     ['grnPrefix', 'Goods return note prefix', 'Numbers the returns coming back from a pharmacy', 'text'],
     ['payoutBillPrefix', 'Payout bill prefix', 'Owed to the brand owner', 'text'],
-    ['startNumber', 'Start running number at', 'Used only before any numbers have been reserved', 'number'],
+    /* Each document type draws on its own reserved block - calc.js has
+       startPharmacy/startFee/startPayout for exactly that - and only the
+       fallback was ever on this screen. An operator carrying a sequence over
+       from AutoCount or a previous system could set one number for all three
+       and nothing else, which is the same shape as the insurance rate above:
+       the specific control is invisible, so the pressure lands on the general
+       one. Nothing is reserved yet, so these are still free to set. */
+    ['startNumber', 'Start running number at', 'The fallback, used by any document type that has no number of its own below', 'number'],
+    ['startPharmacy', 'First pharmacy invoice number', 'Leave at 0 to use the fallback above', 'number'],
+    ['startFee', 'First fee invoice number', 'Leave at 0 to use the fallback above', 'number'],
+    ['startPayout', 'First payout bill number', 'Leave at 0 to use the fallback above', 'number'],
     ['invoiceDate', 'Document date (blank = month end)', 'Applies to all three document types', 'date']
   ],
   tracking: [
@@ -4496,6 +4768,12 @@ function renderStatutoryWarnings() {
       'number and TIN print on every invoice, settlement statement and delivery order.</div>';
 }
 function setCfg(k, v) {
+  /* Every other write asks this and this one never did. The database refuses a
+     viewer's save through RLS, so nothing was ever persisted - but the figure
+     changed HERE, every total on screen was recomputed from it, and the toast
+     said "saved". A read-only user could export a CSV or print a statement
+     built on a rate they had just invented. */
+  if (!requireWrite()) { renderCfg(); return; }
   if (typeof CB.DEFAULTS[k] === 'number') v = CB.num(v);
   if (typeof CB.DEFAULTS[k] === 'boolean') v = !!v;
   ST.cfg[k] = v; save(); recompute();
@@ -4507,6 +4785,50 @@ function setCfg(k, v) {
 }
 
 $('#period').onchange = function () { ST.cfg.period = this.value; save(); recompute(); toast('Period set to ' + CB.periodLabel(this.value)); };
+
+/* A copy of everything, on a disk the operator controls.
+ *
+ * Read-only and additive: it writes a file and touches nothing. What it costs
+ * is a few seconds and the honesty of saying which table it is on, because a
+ * button that appears to do nothing for eight seconds gets pressed again.
+ *
+ * The row counts go INTO the file. A backup whose contents nobody ever looked
+ * at is a habit, not a safeguard; the counts are what make it possible to see
+ * at a glance - a year later, in a folder of these - that this one has the
+ * stock movements and that one somehow does not. */
+function backupAll() {
+  var st = $('#backupState');
+  var note = function (t) { if (st) st.textContent = t; };
+  note('Starting\u2026');
+  var started = new Date();
+
+  DB.exportAll(function (t) { note('Reading ' + t.replace(/_/g, ' ') + '\u2026'); })
+    .then(function (res) {
+      var total = Object.keys(res.counts).reduce(function (n, k) { return n + res.counts[k]; }, 0);
+      dl('CTG4U_Consignment_FULL_BACKUP_' + started.toISOString().slice(0, 10) + '.json',
+        new Blob([JSON.stringify({
+          kind: 'ctg4u-consignment-full-backup',
+          version: 1,
+          takenAt: started.toISOString(),
+          takenBy: (ME && ME.email) || '',
+          counts: res.counts,
+          tables: res.tables
+        }, null, 1)], { type: 'application/json' }));
+
+      /* Named, not just totalled: "runs: 0" is the sentence that tells the
+         operator this copy is not the one they think it is. */
+      var empty = Object.keys(res.counts).filter(function (k) { return !res.counts[k]; });
+      note(total.toLocaleString() + ' rows saved' +
+        (empty.length ? ' \u2014 nothing in: ' + empty.join(', ') : ''));
+      toast('Full backup downloaded \u2014 ' + total.toLocaleString() + ' rows across ' +
+        Object.keys(res.counts).length + ' tables', 'ok');
+      return DB.audit('backup_downloaded', { rows: total, counts: res.counts });
+    })
+    .catch(function (e) {
+      note('');
+      toast('Backup failed: ' + (e.message || e) + ' \u2014 nothing was written', 'bad');
+    });
+}
 
 function backup() {
   dl('CTG4U_Consignment_Master_' + new Date().toISOString().slice(0, 10) + '.json',
@@ -5009,8 +5331,20 @@ function showRun(id) {
          answers "already done" rather than moving anything twice. */
       (d.run.status === 'final' && postedRows !== null
         ? (postedRows
+            /* Posting is idempotent, which is right for a dropped connection and
+               wrong for a bad recipe: press Post again after fixing the product
+               master and the database answers "already done" while the original,
+               incorrect movements stay on every shelf. Correcting them needs the
+               posting taken back first, and until now nothing in the app could
+               do that - stock_unpost_run existed at every layer below and had no
+               caller. The run, its invoices and its numbers are untouched; only
+               the shelf movements go. */
             ? '<div class="hint"><b>Stock:</b> ' + postedRows + ' line(s) moved out of the ' +
-              'pharmacies for this run.</div>'
+              'pharmacies for this run.' +
+              (CAN_WRITE
+                ? ' <button class="btn sm ghost" style="margin-left:8px" onclick="unpostStock(&#39;' +
+                  esc(d.run.id) + '&#39;,' + postedRows + ')">Take this stock back</button>'
+                : '') + '</div>'
             : '<div class="note warn"><b>No stock moved for this run.</b> The invoices are ' +
               'unaffected, but every pharmacy&rsquo;s shelf still shows these goods as unsold. ' +
               (CAN_WRITE
@@ -5062,6 +5396,31 @@ function postStock(id) {
     .catch(function (e) { reportStockPost(null, e); });
 }
 
+/* Undo a posting, so a wrong one can be corrected.
+ *
+ * Only the movements. The run stays final, the invoices stay issued and the
+ * document numbers stay burnt - none of that is in question, and re-posting is
+ * the next thing the operator will do. Asked for out loud because it changes
+ * what every pharmacy in the run appears to be holding. */
+function unpostStock(id, rows) {
+  if (!requireWrite()) return;
+  var NL = String.fromCharCode(10);
+  if (!confirm('Take back ' + rows + ' stock line(s) for this run?' + NL + NL +
+    'Every pharmacy in it goes back to showing these goods as unsold. The invoices, ' +
+    'the settlement and the document numbers are not touched.' + NL + NL +
+    'Do this to correct a posting made against a wrong product or bundle recipe: ' +
+    'take it back, fix the master data, then press "Post stock for this run".')) return;
+
+  DB.stock.unpostRun(id)
+    .then(function (n) {
+      toast((n || 0) + ' stock line(s) came back onto the shelves. Fix the master data, ' +
+        'then post this run again.', 'ok');
+      return DB.audit('stock_unposted', { run: id, rows: n });
+    })
+    .then(function () { showRun(id); })
+    .catch(err);
+}
+
 /* Voiding keeps the run and its numbers on record. The numbers stay burnt on
  * purpose: they may already be sitting in Xero. */
 /* Voiding here does not reach into Xero.
@@ -5091,11 +5450,12 @@ function voidRun(id) {
     var note = prompt('Why is this run being voided? (kept on the record)');
     if (note === null) return;
     var back = 0;
+    /* One call. The status and the stock come back together or not at all -
+       there is no longer a window where the run reads as void while the shelves
+       still show the sale. A document number stays burnt because it may be in
+       Xero already; a stock movement has no such life outside this database. */
     return DB.voidRun(id, note)
-      /* The goods never left, so the ledger must not go on saying they did.
-         A document number stays burnt because it may be in Xero already; a
-         stock movement has no such life outside this database, so it goes. */
-      .then(function () { return DB.stock.unpostRun(id).then(function (n) { back = n; }); })
+      .then(function (res) { back = (res && res.stock_taken_back) || 0; })
       .then(function () {
         return DB.audit('run_voided', { run: id, note: note,
           alreadyInXero: posted.length, stockTakenBack: back });

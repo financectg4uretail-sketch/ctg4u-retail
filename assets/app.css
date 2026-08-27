@@ -534,8 +534,12 @@ details>summary:hover{color:var(--blue-dk)}
 
 /* ------------------------------------------------------------- write access */
 
-.ro-only{display:none}
-body.can-write .ro-only{display:inline-flex}
+/* Specificity, not order. `.ro-only` is (0,1,0) and `button.btn` is (0,1,1),
+   so the button rule won and every write button stayed visible to a read-only
+   account - which then had them refused on click. Stated as "hidden unless you
+   may write", which is both what it means and (0,2,0). */
+:where(body):not(.can-write) .ro-only{display:none}
+.ro-only{display:inline-flex}
 body.readonly input,body.readonly select,body.readonly textarea{pointer-events:none;opacity:.6}
 
 /* Nine menu items and a company name stop fitting well before the phone

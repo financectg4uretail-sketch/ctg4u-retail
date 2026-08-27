@@ -541,13 +541,10 @@
           .eq('run_id', runId)
           .then(function (r) { fail('Check posted stock', r.error); return r.count || 0; });
       },
-      history: function (pharmacyId, productId) {
-        return sb.from('stock_movements')
-          .select('moved_on,qty,kind,period,note,run_id')
-          .eq('pharmacy_id', pharmacyId).eq('product_id', productId)
-          .order('moved_on', { ascending: false }).limit(200)
-          .then(function (r) { return rows(r, 'Read stock history'); });
-      }
+      /* history() was here: the same question as ledger(), answered worse -
+         no running balance, no document, newest first, capped at 200. ledger()
+         replaced it when the drill-down was built and nothing has called this
+         since. Two ways to ask one question is how they start to disagree. */
     },
 
     /* ---------------------------------------------------- stock documents */
@@ -672,14 +669,29 @@
         })
       }).then(function (r) { fail('Finalise run', r.error); return r.data || {}; });
     },
+    /* Voiding used to be an UPDATE here and a stock_unpost_run() there, with a
+     * network in between. If the first landed and the second did not, the run
+     * read as void while its stock movements stayed on the ledger for good, and
+     * every pharmacy in it under-reported its shelves by quantities that were
+     * never sold. Nothing downstream compares the two. One RPC, one
+     * transaction. Returns { already_void, stock_taken_back }. */
     voidRun: function (runId, note) {
-      return sb.from('runs').update({ status: 'void', note: note || null })
-        .eq('id', runId).then(function (r) { fail('Void run', r.error); return true; });
+      return sb.rpc('void_run', { p_run_id: runId, p_note: note || null })
+        .then(function (r) { fail('Void run', r.error); return r.data || {}; });
     },
-    deleteRun: function (runId) {
-      return sb.from('runs').delete().eq('id', runId)
-        .then(function (r) { fail('Delete run', r.error); return true; });
-    },
+    /* deleteRun() was here and is gone on purpose.
+     *
+     * Nothing called it, and nothing should: this system's rule is that a run
+     * is VOIDED, never removed, because its document numbers may already be
+     * invoices in Xero and reserve_doc_numbers never goes backwards. A deleted
+     * run leaves those numbers reserved with nothing on this side explaining
+     * what they were - the exact gap someone reconciling a control account
+     * months later cannot close. The database agrees: stock_movements and
+     * documents both hold run_id with ON DELETE RESTRICT, so the call could
+     * only ever have succeeded on a run that had done nothing at all.
+     *
+     * Kept as a comment rather than silently dropped, so the next person to
+     * want it finds the reasoning instead of writing it again. Use voidRun(). */
 
     /* ------------------------------------------------------------- Xero */
 
@@ -722,6 +734,62 @@
       post: function (runId) {
         return DB.xero.call('post', { method: 'POST', body: { runId: runId } });
       }
+    },
+
+    /* ------------------------------------------------------------- backup */
+
+    /* Everything this database holds about the business, in one file.
+     *
+     * `backup()` on the Settings page exports the master data and the rates -
+     * the things a person typed - and nothing else. The part that cannot be
+     * retyped is absent: which months were billed, what each pharmacy was
+     * charged, which invoice numbers were issued and to whom, what is on each
+     * shelf, and who did what. All of it lives in exactly one Supabase project,
+     * reachable through exactly one Google account. A closed project, a lost
+     * password or a bad delete takes the lot, and the only reconstruction is
+     * from Xero plus sixty-two pharmacies' spreadsheets.
+     *
+     * Read-only, and no new exposure: every table here is already readable by
+     * whoever is signed in, so a viewer's copy simply comes back smaller.
+     * xero_connection is deliberately not in the list - it holds the OAuth
+     * tokens, RLS denies it to the browser outright, and a backup file is the
+     * last place a refresh token should be.
+     *
+     * Ordered and paged, because PostgREST returns a thousand rows at a time and
+     * an unordered page boundary silently drops and repeats rows. A backup that
+     * is quietly missing a fortnight of stock is worse than none. */
+    BACKUP_TABLES: [
+      ['pharmacies', 'id'], ['brand_owners', 'id'], ['products', 'id'],
+      ['product_components', 'bundle_id'], ['settings', 'id'],
+      ['runs', 'id'], ['run_lines', 'id'], ['run_settlements', 'id'],
+      ['documents', 'id'], ['doc_counters', 'doc_type'],
+      ['stock_docs', 'id'], ['stock_movements', 'id'],
+      ['audit_log', 'id'], ['app_users', 'id']
+    ],
+
+    exportAll: function (onTable) {
+      var PAGE = 1000;
+      var out = {}, counts = {};
+      return DB.BACKUP_TABLES.reduce(function (chain, t) {
+        var name = t[0], key = t[1];
+        return chain.then(function () {
+          if (onTable) onTable(name);
+          var all = [];
+          var page = function (from) {
+            return sb.from(name).select('*').order(key, { ascending: true })
+              .range(from, from + PAGE - 1)
+              .then(function (r) {
+                fail('Back up ' + name, r.error);
+                var got = r.data || [];
+                all = all.concat(got);
+                return got.length < PAGE ? null : page(from + PAGE);
+              });
+          };
+          return page(0).then(function () { out[name] = all; counts[name] = all.length; });
+        });
+      }, Promise.resolve()).then(function () {
+        return { tables: out, counts: counts };
+      });
     },
 
     audit: function (action, detail) {

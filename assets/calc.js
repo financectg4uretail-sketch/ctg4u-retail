@@ -1916,6 +1916,39 @@
   var PKG_TOTAL_RE      = /^\s*total\s*sales\s*$/i;
   var PKG_CREDIT_RE     = /credit\s*note/i;
   var PKG_VOUCHER_RE    = /amount\s*after\s*voucher/i;
+
+  /* Columns that are figures about the sale, not things in the package.
+   *
+   * The composition is read by elimination - every column that is not one of
+   * the five known ones is a product - which is right, because these sheets come
+   * from sixty-two pharmacies and any of them may add or reorder a column. The
+   * cost is that a column they add which is NOT a product becomes a phantom one.
+   *
+   * One did: "Price per bottle / box", a per-unit price the pharmacies work out
+   * beside the package price. It was read as a component on all 343 sale lines
+   * of all 35 sheets in the July file, with its value - 160.792, 128.876 - taken
+   * as a quantity. No stock moved for it, because no product of that name exists,
+   * so the damage was not to the ledger: it was that this phantom appeared in the
+   * "components not in the product master" report on every single run, where it
+   * sat indistinguishably beside the seven products that really are missing.
+   *
+   * Anchored deliberately. Every real component in that file - MCS Pigmentation
+   * Cream, Mizino Sachet Travel Pack, Tea Tree Repair Oil - is a named thing, and
+   * a loose /total/ would strike a product legitimately called "... Total Detox".
+   * A money word has to open the header, or appear as one of the fixed phrases
+   * below, to disqualify a column.
+   *
+   * Corroborating signal, worth knowing if this ever needs revisiting: a real
+   * component quantity is a count - 1, 2, 3 - and this column held fractions in
+   * the hundreds. */
+  var NOT_A_PRODUCT = new RegExp(
+    '^(?:price|amount|total|subtotal|sub-total|value|jumlah|harga|nilai)\\b' +
+    '|\\bprice\\s*per\\b' +
+    '|\\bunit\\s*price\\b' +
+    '|\\bafter\\s*deduct\\b' +
+    '|\\bcommission\\b|\\binsurans\\b|\\binsurance\\b' +
+    '|\\bdiscount\\b|\\bvoucher\\b|\\bcredit\\s*note\\b' +
+    '|%|\\brm\\b|\\bmyr\\b', 'i');
   var PKG_COMMISSION_RE = /^\s*commission\s*$/i;
   var PKG_INSURANCE_RE  = /^\s*insuran(s|ce)\s*$/i;
   var PKG_BILLING_RE    = /^\s*billing\s*$/i;
@@ -2004,7 +2037,7 @@
     });
     var comps = [];
     cells.forEach(function (name, i) {
-      if (known[i] || !name) return;
+      if (known[i] || !name || NOT_A_PRODUCT.test(name)) return;
       comps.push({ at: i, name: String(rows[h][i]).trim() });
     });
 
@@ -2193,6 +2226,240 @@
       out.forEach(function (p) {
         if (!p.pharmacyTrading) p.pharmacyTrading = id.pharmacyTrading;
         if (!p.pharmacyContact) p.pharmacyContact = id.pharmacyContact;
+      });
+    }
+    return out;
+  }
+
+  var MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+  /* Whose shop is this? A billing sheet answers twice.
+   *
+   * The block header carries a registered name - "UNICARE RX SDN BHD" - and the
+   * tab carries a trading name - "UNICARE PHARMACY (TEKU)". The registered name
+   * used to win outright at 0.72, on the reasoning that a legal name is the more
+   * precise identifier. For a group of branches it is the opposite, because the
+   * branch is exactly the part the pharmacy leaves out.
+   *
+   * Four UNICARE branches file under two SDN BHDs and write the stem with no
+   * suffix. "UNICARE RX SDN BHD" scores 0.761 against UNICARE RX SDN BHD (CSH)
+   * and 0.735 against (TEKU). Not a tie, so the rivals guard never fired, and
+   * the higher one took the lot - while the tab name matched its own branch at
+   * 1.000 and was never consulted.
+   *
+   * On the operator's July file that put four branches onto two wrong companies:
+   * wrong registered name, wrong company number and wrong TIN on a statutory
+   * invoice, and three branches' goods on one shop's account. It looked like a
+   * clean import.
+   *
+   * So: hear both, take the more confident, and where they disagree without a
+   * clear margin decide nothing at all. An undecided block is on screen and
+   * holds the run back; a confidently wrong one is an invoice.
+   *
+   * Returns { pharmacy, how, rivals } - `rivals` set only when it refused, so
+   * the screen can name the two records and let the operator settle it. */
+  var PICK_MARGIN = 0.08;
+
+  function pickPharmacy(contactOnSheet, nameOnTab, pharmacies) {
+    pharmacies = pharmacies || [];
+    var byContact = contactOnSheet
+      ? bestMatch(contactOnSheet, pharmacies, ['contact', 'trading', 'code'], 0.72) : null;
+    var byName = nameOnTab
+      ? bestMatch(nameOnTab, pharmacies, ['trading', 'contact', 'code'], 0.7) : null;
+
+    /* a name that fits several branches equally fits none of them - the rule
+       resolveLines already applies row by row */
+    if (byContact && byContact.rivals > 1) byContact = null;
+    if (byName && byName.rivals > 1) byName = null;
+
+    if (byContact && byName && byContact.item !== byName.item) {
+      if (Math.abs(byContact.score - byName.score) < PICK_MARGIN) {
+        return { pharmacy: null, how: null, rivals: [byContact.item, byName.item] };
+      }
+      var win = byContact.score > byName.score ? byContact : byName;
+      return { pharmacy: win.item, how: win === byContact ? 'registered name' : 'trading name',
+               rivals: null };
+    }
+
+    var m = byContact || byName;
+    if (!m) return { pharmacy: null, how: null, rivals: null };
+    return { pharmacy: m.item, how: m === byContact ? 'registered name' : 'trading name',
+             rivals: null };
+  }
+
+  /* The month a block's own title says it covers.
+   *
+   * These statements run 21st to 20th - "21 Jun-20 Jul 2026" - and the month
+   * being billed is the one the period ENDS in, which is how the pharmacy and
+   * the accounts both read it. The year is written once at the end, so a label
+   * that crosses a year boundary is left alone rather than guessed at. */
+  function periodOfLabel(label) {
+    var t = String(label || '').toLowerCase();
+    var yr = t.match(/(20\d\d)/);
+    if (!yr) return '';
+    var months = [];
+    MONTHS.forEach(function (m, i) {
+      var re = new RegExp(m, 'g'), hit;
+      while ((hit = re.exec(t))) months.push({ at: hit.index, m: i + 1 });
+    });
+    if (!months.length) return '';
+    months.sort(function (a, b) { return a.at - b.at; });
+    var last = months[months.length - 1].m;
+    /* Dec-Jan spans two years and the label carries only one; refusing is the
+       honest answer, since guessing wrong dates a whole month's invoices. */
+    if (months.length > 1 && months[0].m > last) return '';
+    return yr[1] + '-' + (last < 10 ? '0' : '') + last;
+  }
+
+  /* What is wrong with a BATCH of blocks, before any figure is read.
+   *
+   * Neither of these can be caught downstream, which is the point of checking
+   * here. crossCheck compares the two sides of the same rows, so a block
+   * counted twice doubles both sides and balances perfectly; and the period a
+   * sheet states was parsed and then thrown away, so a June-July file billed
+   * under October produces a complete, internally consistent month dated four
+   * months wrong, with document numbers burnt in the wrong sequence.
+   *
+   * `packages` is the import screen's list: each carries pharmacy, brandRaw,
+   * periodLabel and parsed. */
+  function blockWarnings(packages, c) {
+    c = cfg(c);
+    var out = [];
+    var live = (packages || []).filter(function (p) {
+      return p && p.parsed && p.parsed.lines && p.parsed.lines.length;
+    });
+
+    /* 1. the same shop, the same brand, the same period, twice. Two copies of
+          one workbook in a single drop is all it takes, and the file names do
+          not have to match - "…(1).xlsx" is the usual way. */
+    var distinctSheets = function (list) {
+      var n = {};
+      list.forEach(function (p) { n[p.name || ''] = 1; });
+      return Object.keys(n).length;
+    };
+    var seen = {}, order = [];
+    live.forEach(function (p) {
+      var who = p.pharmacy ? (p.pharmacy.code || p.pharmacy.trading) : ('sheet:' + (p.name || ''));
+      var k = who + '|' + normKey(p.brandRaw || '') + '|' + (p.periodLabel || '');
+      if (!seen[k]) { seen[k] = []; order.push(k); }
+      seen[k].push(p);
+    });
+    /* Two blocks under one key are not necessarily the same sales twice. If
+       they came from DIFFERENT tabs, what is actually wrong is upstream: two
+       shops resolved to one master record, and the run would bill one of them
+       for the other's goods. Same severity, entirely different sentence, and
+       telling the operator to "remove the duplicate file" when there is only
+       one file is how a real problem gets dismissed as a false alarm. */
+    var dups = order.filter(function (k) {
+      return seen[k].length > 1 && distinctSheets(seen[k]) === 1;
+    });
+    var merged = order.filter(function (k) {
+      return seen[k].length > 1 && distinctSheets(seen[k]) > 1;
+    });
+    if (merged.length) {
+      var who = seen[merged[0]][0];
+      out.push({
+        kind: 'duplicate',
+        text: merged.length + ' pharmacy record(s) are claimed by more than one sheet, so one shop ' +
+          'would be billed for another\u2019s goods. First: ' +
+          seen[merged[0]].map(function (p) { return p.name; }).join(' and ') +
+          ' all resolved to ' + ((who.pharmacy && (who.pharmacy.code + ' ' + who.pharmacy.trading)) || '?') +
+          '. Check the pharmacy master has a separate record per branch, and that each ' +
+          'branch\u2019s registered name carries its own suffix.'
+      });
+    }
+    if (dups.length) {
+      var gross = 0;
+      dups.forEach(function (k) {
+        seen[k].slice(1).forEach(function (p) {
+          gross += sum(p.parsed.lines, function (l) { return l.price; });
+        });
+      });
+      var eg = seen[dups[0]][0];
+      out.push({
+        kind: 'duplicate',
+        text: dups.length + ' pharmacy/brand combination(s) appear more than once, which would bill ' +
+          'them twice — about ' + money(r2(gross)) + ' of duplicate sales. First: ' +
+          ((eg.pharmacy && eg.pharmacy.trading) || eg.name) + ' / ' + (eg.brandRaw || '?') +
+          '. Check whether the same workbook was picked twice; nothing downstream can catch this, ' +
+          'because doubling both sides still balances.'
+      });
+    }
+
+    /* 2. every sheet says one rate and Settings says another.
+     *
+     * packageCrossCheck already compares each block against the rates it states
+     * and refuses the ones that disagree. That is right per block and useless in
+     * bulk: when Settings is the thing that is wrong, all of them disagree, and
+     * the operator gets the same sentence seventy-two times with no hint that
+     * one number in one place would clear the lot.
+     *
+     * This happened. `insuranceFeePct` was set to 0 in the live database - the
+     * natural way to say "we no longer deduct it", except that is what
+     * `deductInsurance` is for and the rate's remaining job is to recognise the
+     * Insurans line the pharmacy sheets print. Every one of the 72 blocks in the
+     * July file states 0.8%, so every one of them was refused and the month
+     * could not be billed at all.
+     *
+     * Only when the sheets AGREE with each other. If they disagree among
+     * themselves, the sheets are the problem and the per-block message is the
+     * right one. */
+    var RATE_FACTS = [
+      { key: 'discountPct', on: 'commissionRate', label: 'commission',
+        movesMoney: true },
+      { key: 'insuranceFeePct', on: 'insuranceRate', label: 'insurance',
+        movesMoney: false }
+    ];
+    RATE_FACTS.forEach(function (f) {
+      var tally = {}, total = 0;
+      live.forEach(function (p) {
+        var v = p.parsed.stated && p.parsed.stated[f.on];
+        if (!v) return;
+        var pct = r2(v * 100);
+        tally[pct] = (tally[pct] || 0) + 1;
+        total++;
+      });
+      var vals = Object.keys(tally);
+      if (vals.length !== 1 || !total) return;       // the sheets do not agree; not this
+      var stated = +vals[0];
+      var have = r2(num(c[f.key]) || 0);
+      if (Math.abs(stated - have) < 0.001) return;   // they already match
+
+      out.push({
+        kind: 'rate',
+        text: 'All ' + total + ' sheet(s) in this file state a ' + r2(stated) + '% ' + f.label +
+          ' rate, and Settings says ' + r2(have) + '%. Every one of them will be held back ' +
+          'until the two agree — when every sheet disagrees the same way, it is usually the ' +
+          'setting that is out of date, not the sheets.',
+        setting: f.key,
+        value: stated,
+        label: f.label,
+        movesMoney: f.movesMoney
+      });
+    });
+
+    /* 3. the period the sheets state against the period being billed */
+    var months = {}, unread = 0;
+    live.forEach(function (p) {
+      var m = periodOfLabel(p.periodLabel);
+      if (!m) { unread++; return; }
+      months[m] = (months[m] || 0) + 1;
+    });
+    var keys = Object.keys(months).sort();
+    if (keys.length && c.period && keys.indexOf(c.period) < 0) {
+      out.push({
+        kind: 'period',
+        text: 'These sheets are for ' + keys.map(periodLabel).join(' and ') +
+          ', but the period being billed is ' + periodLabel(c.period) +
+          '. Every invoice would be dated and numbered for ' + periodLabel(c.period) + '.',
+        suggest: keys.length === 1 ? keys[0] : ''
+      });
+    } else if (keys.length > 1) {
+      out.push({
+        kind: 'period',
+        text: 'These sheets cover more than one period — ' + keys.map(periodLabel).join(', ') +
+          ' — and a run bills one. Import them a month at a time.'
       });
     }
     return out;
@@ -2578,6 +2845,8 @@
     productRollup: productRollup, shares: shares,
     deliveryOrderHTML: deliveryOrderHTML, deliveryOrderDoc: deliveryOrderDoc, DO_CSS: DO_CSS,
     matchBrandOwner: matchBrandOwner, brandDecided: brandDecided,
+    pickPharmacy: pickPharmacy, PICK_MARGIN: PICK_MARGIN,
+    periodOfLabel: periodOfLabel, blockWarnings: blockWarnings,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
     parsePackageSheets: parsePackageSheets, packageHeaderRows: packageHeaderRows,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
