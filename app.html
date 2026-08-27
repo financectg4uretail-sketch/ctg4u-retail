@@ -306,9 +306,9 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=cd1590ca70"></script>
+<script src="assets/db.js?v=04b572bf88"></script>
 <script src="assets/xlsx.full.min.js?v=56e27b479a"></script>
-<script src="assets/calc.js?v=ac0af6ac7a"></script>
+<script src="assets/calc.js?v=2609a9fe89"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -329,7 +329,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'a5a58063535d';
+  var MINE = '7d32af038674';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -3995,6 +3995,16 @@ function renderXeroContacts() {
       }).join('') + '</table></div>'
       : '<div class="note" style="border-color:var(--ok);background:#00a99d0f">✓ Every pharmacy already matches a Xero contact exactly.</div>') +
 
+    /* The statutory particulars every document needs, taken from where they
+       already are rather than typed sixty-two times. */
+    '<div style="margin-top:16px"><b>Complete the pharmacy particulars</b>' +
+    '<div class="hint">Every document carries both parties&rsquo; full name, address, ' +
+    'registration number and TIN. Xero holds the address and the tax number already &mdash; ' +
+    'this fills in the blanks and replaces nothing.</div>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<button class="btn sm" onclick="fillParticularsFromXero()">Fill missing address and TIN from Xero</button>' +
+    '</div></div>' +
+
     '<div style="margin-top:16px"><b>Add a contact as a brand owner</b>' +
     '<div class="row" style="margin-top:8px">' +
     '<select id="xcBrandPick" style="min-width:280px">' +
@@ -4031,7 +4041,11 @@ function applyXeroNames(includeLikelyLooking) {
   var writes = todo.map(function (x) {
     var row = ST.master.pharmacies[x.index];
     row.contact = x.suggestion.name;
+    /* Blanks only, for the same reason the address fill does it: what Xero has
+       nothing to say about must not erase what somebody typed here. */
     if (x.suggestion.email && !row.email) row.email = x.suggestion.email;
+    if (x.suggestion.address && !String(row.address || '').trim()) row.address = x.suggestion.address;
+    if (x.suggestion.taxNumber && !String(row.tin || '').trim()) row.tin = x.suggestion.taxNumber;
     return DB.savePharmacy(row);
   });
   Promise.all(writes)
@@ -4043,6 +4057,53 @@ function applyXeroNames(includeLikelyLooking) {
       err(e);
       refreshMaster();                          // never leave the screen lying
     });
+}
+
+/* Fill in what Xero already knows and the master does not.
+ *
+ * The address and the tax number are on the Xero contact, and the export the
+ * Master data tab already imports carries both. Typing sixty-two addresses to
+ * satisfy a statutory requirement is not work anybody should do twice.
+ *
+ * Only ever fills a BLANK. A value on the Xero contact is not more true than
+ * one somebody here typed on purpose, and the one thing worse than a missing
+ * address is a silently replaced one - the same rule syncBrandOwnerFromXero
+ * follows in the other direction. */
+function fillParticularsFromXero() {
+  if (!requireWrite()) return;
+  var list = ST.xeroContacts || [];
+  if (!list.length) { toast('Import the Xero contact export first', 'warn'); return; }
+
+  var by = {};
+  list.forEach(function (c) { by[CB.normKey(c.name)] = c; });
+
+  var todo = [];
+  ST.master.pharmacies.forEach(function (p) {
+    var c = by[CB.normKey(p.contact)] || by[CB.normKey(p.trading)];
+    if (!c) return;
+    var row = { id: p.id }, n = 0;
+    if (!String(p.address || '').trim() && c.address) { row.address = c.address; n++; }
+    if (!String(p.tin || '').trim() && c.taxNumber) { row.tin = c.taxNumber; n++; }
+    if (!String(p.email || '').trim() && c.email) { row.email = c.email; n++; }
+    if (n) todo.push({ row: row, name: p.trading, fields: n });
+  });
+
+  if (!todo.length) {
+    toast('Nothing to fill — every matched pharmacy already has what Xero holds', 'ok');
+    return;
+  }
+  if (!confirm('Fill in ' + todo.reduce(function (t, x) { return t + x.fields; }, 0) +
+      ' blank field(s) across ' + todo.length + ' pharmacy(s) from Xero?\n\n' +
+      'Only blanks are filled. Nothing already entered here is replaced.')) return;
+
+  Promise.all(todo.map(function (x) { return DB.savePharmacy(x.row); }))
+    .then(refreshMaster)
+    .then(function () {
+      renderStatutoryWarnings();
+      toast(todo.length + ' pharmacy(s) completed from Xero', 'ok');
+      return DB.audit('xero_particulars_filled', { pharmacies: todo.length });
+    })
+    .catch(function (e) { err(e); refreshMaster(); });
 }
 
 function addBrandOwnerFromXero() {
@@ -4075,9 +4136,9 @@ function exportMaster() {
     }));
   s('Products', ['sku', 'name', 'project', 'price', 'aliases'],
     ST.master.products.map(function (p) { return [p.sku, p.name, p.project, p.price, (p.aliases || []).join(' | ')]; }));
-  s('Pharmacies', ['code', 'trading', 'contact', 'email', 'tin', 'brn', 'state', 'aliases'],
+  s('Pharmacies', ['code', 'trading', 'contact', 'email', 'tin', 'brn', 'address', 'state', 'aliases'],
     ST.master.pharmacies.map(function (p) {
-      return [p.code, p.trading, p.contact, p.email, p.tin, p.brn, p.state,
+      return [p.code, p.trading, p.contact, p.email, p.tin, p.brn, p.address, p.state,
               (p.aliases || []).join(' | ')];
     }));
   XLSX.writeFile(wb, 'CTG4U_Consignment_Master.xlsx');
@@ -4150,7 +4211,7 @@ $('#fileMaster').onchange = function (e) {
             contact: r.contact || r.trading, trading: r.trading || r.contact,
             active: true
           };
-          ['tin', 'brn', 'email', 'state'].forEach(function (k) {
+          ['tin', 'brn', 'email', 'state', 'address'].forEach(function (k) {
             if (phCols[k]) prow[k] = r[k];
           });
           if (phCols.aliases) prow.aliases = spl(r.aliases);
@@ -4420,10 +4481,15 @@ function renderRateWarnings() {
  * it when a pharmacy's accounts department sends the invoice back. */
 function renderStatutoryWarnings() {
   var host = $('#cfgStat'); if (!host) return;
-  var w = CB.statutoryWarnings(ST.cfg);
+  /* BOTH sides. A document identifies two companies, and a counterparty
+     missing a particular is exactly as unusable as our own being missing -
+     with the difference that nobody here would notice, because the field
+     simply does not print. */
+  var w = CB.statutoryWarnings(ST.cfg, ST.master);
   host.innerHTML = w.length
     ? '<div class="note bad"><b>Documents cannot be issued complete.</b> Every invoice, ' +
-      'settlement statement and delivery order carries these:' +
+      'settlement statement and delivery order carries the full name, address, ' +
+      'registration number and TIN of <b>both</b> parties:' +
       '<ul style="margin:8px 0 0;padding-left:20px">' +
       w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>'
     : '<div class="note"><b>Company particulars are complete.</b> Name, address, registration ' +
@@ -4613,7 +4679,7 @@ function finaliseRun() {
       : '';
     /* A month's worth of documents about to be issued without a statutory
        particular is worth stopping for, not a note somebody scrolls past. */
-    var sw = CB.statutoryWarnings(ST.cfg);
+    var sw = CB.statutoryWarnings(ST.cfg, ST.master);
     if (sw.length && !confirm('These company particulars are missing, and every document in ' +
       'this run carries them:\n\n' + sw.map(function (x) { return '  \u2022 ' + x; }).join('\n\n') +
       '\n\nFill them in on Settings first. Carry on anyway?')) { release(); go('cfg'); return; }

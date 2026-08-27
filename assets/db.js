@@ -222,6 +222,8 @@
             return {
               id: p.id, code: p.code, contact: p.contact, trading: p.trading,
               tin: p.tin || '', brn: p.brn || '', email: p.email || '', state: p.state || '',
+              /* printed on every document beside the registration number and TIN */
+              address: p.address || '',
               town: p.town || '', lat: p.lat, lng: p.lng,
               trackingOption: p.tracking_option || '',
               aliases: p.aliases || [], active: p.active
@@ -262,7 +264,7 @@
         code: 'code', contact: 'contact', trading: 'trading',
         tin: ['tin', 'blank'], brn: ['brn', 'blank'], email: ['email', 'blank'],
         state: ['state', 'blank'], trackingOption: ['tracking_option', 'blank'],
-        town: ['town', 'blank'], lat: 'lat', lng: 'lng',
+        town: ['town', 'blank'], address: ['address', 'blank'], lat: 'lat', lng: 'lng',
         aliases: 'aliases'
       });
       if (Object.prototype.hasOwnProperty.call(p, 'active')) row.active = p.active !== false;
@@ -278,7 +280,7 @@
       var b = bulkRows(list, {
         code: 'code', contact: 'contact', trading: 'trading',
         tin: 'tin', brn: 'brn', email: 'email', state: 'state',
-        town: 'town', lat: 'lat', lng: 'lng',
+        town: 'town', address: 'address', lat: 'lat', lng: 'lng',
         aliases: 'aliases', trackingOption: 'tracking_option', active: 'active'
       });
       /* What was left alone rides back on the result so the caller can tell the

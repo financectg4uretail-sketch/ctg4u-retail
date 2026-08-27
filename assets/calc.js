@@ -1028,12 +1028,54 @@
       '</div>';
   }
 
+  /* The OTHER party's particulars, stated the same way on every document.
+   *
+   * The same four the issuer carries, for the same reason: a document is only
+   * usable by the recipient's own accounts department, or by LHDN, if it
+   * identifies both sides of the transaction.
+   *
+   * A pharmacy and a brand owner name the same facts differently - trading and
+   * contact against name and xeroContact, tin against taxNo - and normalising
+   * that here is what lets one block serve both. Doing it twice is how the
+   * delivery order came to print a registration number without a TIN while the
+   * settlement statement printed both.
+   *
+   * The registered name is shown only when it differs from the trading name,
+   * because repeating a company's own name back at it twice reads as an error. */
+  function partyKV(party, label) {
+    party = party || {};
+    var kv = function (k, v) {
+      return v ? '<div><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>' : '';
+    };
+    var trading = party.trading || party.name || '';
+    var legal = party.contact || party.xeroContact || party.name || '';
+    var addr = party.address || '';
+    var tin = party.tin || party.taxNo || '';
+    /* NOT normKey. That is a MATCHING tool and it deliberately throws away SDN
+       BHD and PLT, which is exactly the part a statutory document has to carry:
+       "9 NINE PHARMACY" and "9 NINE PHARMACY PLT" normalise to one string, and
+       comparing that way suppressed the registered name of every pharmacy whose
+       trading name is its legal name minus the entity type - which is most of
+       them. Compared as written, allowing only case and spacing to differ. */
+    var same = function (a, b) {
+      var t = function (x) { return String(x || '').toUpperCase().replace(/\s+/g, ' ').trim(); };
+      return t(a) === t(b);
+    };
+    return kv(label || 'Name', trading) +
+      (legal && !same(legal, trading) ? kv('Registered name', legal) : '') +
+      (addr
+        ? '<div><span>Address</span><b>' + lines(addr).map(esc).join('<br>') + '</b></div>'
+        : '') +
+      kv('Company no.', party.brn) +
+      kv('TIN', tin);
+  }
+
   /* What a document would have to leave out, said before it is printed.
    *
    * A statutory field that is simply absent looks identical to one that does
    * not apply, and the document goes out either way. This is the only warning
    * about it that arrives before somebody else is reading the paper. */
-  function statutoryWarnings(c) {
+  function statutoryWarnings(c, master) {
     c = cfg(c);
     /* No check on the name: cfg() defaults it, and unlike a registration
        number a company's own name is safe to default - inventing an SSM or tax
@@ -1044,6 +1086,28 @@
     if (!String(c.coReg || '').trim()) out.push('The business registration number (SSM) is blank.');
     if (!String(c.coTin || '').trim()) out.push('The tax identification number (TIN) is blank. ' +
       'Every invoice, settlement statement and delivery order is required to carry it.');
+
+    /* The other side of every document. A counterparty missing a particular is
+       not an error anybody sees - the field simply does not print - so it is
+       counted here, by name, while there is still time to fill it in. */
+    if (master) {
+      var gaps = function (list, what, fields) {
+        var bad = (list || []).filter(function (x) {
+          if (x.active === false) return false;
+          return fields.some(function (f) {
+            var v = f === 'tin' ? (x.tin || x.taxNo) : x[f];
+            return !String(v == null ? '' : v).trim();
+          });
+        });
+        if (!bad.length) return;
+        var names = bad.slice(0, 5).map(function (x) { return x.trading || x.name || x.code; });
+        out.push(bad.length + ' ' + (bad.length === 1 ? what[0] : what[1]) +
+          ' cannot be printed complete: ' + names.join(', ') +
+          (bad.length > names.length ? ' and ' + (bad.length - names.length) + ' more' : '') + '.');
+      };
+      gaps(master.pharmacies, ['pharmacy', 'pharmacies'], ['address', 'brn', 'tin']);
+      gaps(master.projects, ['brand owner', 'brand owners'], ['address', 'brn', 'tin']);
+    }
     return out;
   }
 
@@ -1148,13 +1212,11 @@
           '<div class="ref">' + esc(d.number || '—') + '</div>' +
           '<div class="per">' + W.dateLabel + ' ' + esc(d.deliveredOn || '') + '</div>' +
           '<div class="kv">' +
-            kv(W.party, ph.trading) +
-            kv('Registered name', ph.contact) +
-            kv('Company no.', ph.brn) +
-            /* The pharmacy's TIN has been in the master all along and was the
-               one statutory field this document did not print. */
-            kv('TIN', ph.tin) +
-            kv('Location', [ph.town, ph.state].filter(Boolean).join(', ')) +
+            partyKV(ph, W.party) +
+            /* Town and state are what this had before a real address existed.
+               Kept only where one is still missing, so the document degrades to
+               the old behaviour instead of to nothing. */
+            (ph.address ? '' : kv('Location', [ph.town, ph.state].filter(Boolean).join(', '))) +
             kv('Reference', d.reference) +
           '</div>' +
         '</div>' +
@@ -1448,6 +1510,26 @@
     var iEmail = find('emailaddress', 'email');
     var iAcct = find('accountnumber', 'accountnumber');
     var iTax = find('taxnumber', 'taxnumber');
+    /* Xero exports the postal address across several columns and a real export
+       has four address lines where the sample has one.
+       
+       They cannot be looked up by number: the header normaliser above strips
+       everything that is not a letter, so POAddressLine1..4 all collapse to
+       'poaddressline' and asking for 'poaddressline1' finds nothing. Which is
+       convenient rather than awkward - collecting every column with that name,
+       in the order the header has them, is exactly the four lines in order.
+       The street address is the fallback for a contact that has only that. */
+    var cols = function (names) {
+      var out = [];
+      names.forEach(function (n) {
+        for (var j = 0; j < hdr.length; j++) if (hdr[j] === n) out.push(j);
+      });
+      return out;
+    };
+    var addrCols = cols(['poaddressline', 'pocity', 'poregion', 'popostalcode', 'pocountry']);
+    if (!addrCols.length) {
+      addrCols = cols(['saaddressline', 'sacity', 'saregion', 'sapostalcode', 'sacountry']);
+    }
 
     // No usable header? Fall back to the column with the most non-numeric,
     // mostly-distinct values - that is the name column in every Xero export.
@@ -1482,7 +1564,10 @@
         name: name,
         email: iEmail >= 0 ? String(r[iEmail] == null ? '' : r[iEmail]).trim() : '',
         accountNumber: iAcct >= 0 ? String(r[iAcct] == null ? '' : r[iAcct]).trim() : '',
-        taxNumber: iTax >= 0 ? String(r[iTax] == null ? '' : r[iTax]).trim() : ''
+        taxNumber: iTax >= 0 ? String(r[iTax] == null ? '' : r[iTax]).trim() : '',
+        address: addrCols.map(function (i) {
+          return String(r[i] == null ? '' : r[i]).trim();
+        }).filter(Boolean).join('\n')
       });
     });
     return out;
@@ -1726,12 +1811,8 @@
           '<div class="per">Statement for ' + esc(monthStart(c.period)) + ' to ' +
             esc(monthEnd(c.period)) + '</div>' +
           '<div class="kv">' +
-            kv('Brand owner', P.project.name) +
+            partyKV(B, 'Brand owner') +
             kv('Reference', P.code) +
-            (B.address ? '<div><span>Address</span><b>' +
-              lines(B.address).map(esc).join('<br>') + '</b></div>' : '') +
-            kv('Company no.', B.brn) +
-            kv('Tax no.', B.taxNo) +
             bank +
           '</div>' +
         '</div>' +
@@ -2483,7 +2564,7 @@
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,
     xeroPreflight: xeroPreflight,
-    issuerHTML: issuerHTML, statutoryWarnings: statutoryWarnings,
+    issuerHTML: issuerHTML, partyKV: partyKV, statutoryWarnings: statutoryWarnings,
     statementHTML: statementHTML, statementDoc: statementDoc, STMT_CSS: STMT_CSS, esc: esc,
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,
