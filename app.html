@@ -319,7 +319,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=dc89207cb2"></script>
+<script src="assets/calc.js?v=35ca58041b"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'b84780ba9cd6';
+  var MINE = 'a08a253fec04';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1841,6 +1841,7 @@ function renderPackages() {
   var h = '';
   var BATCH_TITLE = {
     duplicate: 'The same sales appear twice.',
+    collision: 'Two sheets are billing one pharmacy.',
     period: 'Wrong period.',
     rate: 'Settings and the sheets disagree on a rate.',
     total: 'A tab does not add up to its own total.'
@@ -2057,7 +2058,7 @@ function renderPackages() {
   var ready = billable.length &&
     !broken.filter(on).length && !unmatched.filter(on).length &&
     !undecided.filter(on).length && !noBrand.filter(on).length &&
-    !batch.some(function (w) { return w.kind === 'duplicate'; });
+    !batch.some(function (w) { return w.kind === 'duplicate' || w.kind === 'collision'; });
   /* Unticking is now the way past this screen, so what it costs is stated.
      A shop dropped from a month is the silent-omission failure this project has
      had before; it is not silent if the money is on the button's own line. */
@@ -2095,7 +2096,10 @@ function renderPackages() {
     /* Named in order of how much damage each does. A duplicate bills a month
        twice and nothing downstream can see it; the others merely hold rows
        back. So it is said first even when several are true at once. */
-    (batch.some(function (w) { return w.kind === 'duplicate'; })
+    (batch.some(function (w) { return w.kind === 'collision'; })
+        ? '<span class="mut">two sheets are billing one pharmacy record &mdash; untick the sheet ' +
+          'that does not belong, or add the missing pharmacy on the Contacts tab</span>'
+      : batch.some(function (w) { return w.kind === 'duplicate'; })
         ? '<span class="mut">the same sales are in here twice &mdash; remove the duplicate file</span>'
       : broken.filter(on).length ? '<span class="mut">fix the disagreeing blocks first, or untick them</span>'
       : undecided.filter(on).length ? '<span class="mut">say which pharmacy those sheets belong to first</span>'
@@ -4398,7 +4402,11 @@ function renderXeroContacts() {
   var list = ST.xeroContacts || [];
   $('#xcStatus').textContent = list.length ? list.length + ' contacts loaded' : 'no contact list loaded';
   var host = $('#xcPanel');
-  if (!list.length) { host.innerHTML = ''; return; }
+  /* An empty contact list used to blank the whole panel, and the link state went
+     with it - so a master with nothing linked to Xero looked exactly like one
+     that was fully linked, which is the state this screen exists to report.
+     The link state is read from the master and needs no contact list at all. */
+  if (!list.length) { host.innerHTML = xeroLinkPanel([]); return; }
 
   var m = CB.matchXeroContacts(ST.master.pharmacies, list);
   var n = { ok: 0, rename: 0, review: 0, none: 0 };
@@ -4463,51 +4471,7 @@ function renderXeroContacts() {
         ' as pharmacies</button></div></div>';
     })() +
 
-    /* Which pharmacies are joined to a Xero contact by Xero's own identifier.
-     *
-     * "Connected to Xero" and "this pharmacy IS that contact" are two different
-     * facts and only the first was ever on a screen, so a master with no links
-     * at all looked exactly like a working one. It matters because an invoice
-     * whose *ContactName Xero does not recognise is not refused - Xero creates a
-     * second contact under that name and posts against it, silently. */
-    (function () {
-      var st = CB.xeroLinkState(ST.master.pharmacies);
-      var ready = CB.xeroContactLinks(list, ST.master.pharmacies);
-      return '<div style="margin-top:16px"><b>Xero contact &rarr; pharmacy</b>' +
-        '<div class="hint">Xero issues every contact an identifier that survives a rename. ' +
-        'Held against it, a document can never land on the wrong contact; matched by name, a ' +
-        'single character out of place makes Xero quietly create a second one and bill that ' +
-        'instead.</div>' +
-        '<div class="grid g3" style="margin-top:9px">' +
-        kpi('Linked by Xero ID', String(st.linked) + ' / ' + st.total) +
-        kpi('Matched by name only', String(st.unlinked.length),
-            st.unlinked.length ? 'warn' : '') +
-        kpi('Can be linked now', String(ready.length)) +
-        '</div>' +
-        (ready.length
-          ? '<div class="row" style="margin-top:9px"><button class="btn sm ro-only" ' +
-            'onclick="linkXeroContacts()">Link ' + ready.length +
-            ' pharmacy(s) to their Xero contact</button>' +
-            '<span class="mut">exact name matches only \u2014 anything less is left for a person</span></div>'
-          : st.unlinked.length
-            ? '<div class="hint" style="margin-top:9px">None of the remaining ' + st.unlinked.length +
-              ' can be linked automatically: no Xero contact carries exactly that registered name. ' +
-              'Correct the name on either side, or add the contact in Xero.</div>'
-            : '<div class="hint" style="margin-top:9px">Every active pharmacy is linked.</div>') +
-        (st.unlinked.length
-          ? '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
-            '<tr><th>Code</th><th>Registered name here</th><th>Status</th></tr>' +
-            st.unlinked.slice(0, 200).map(function (p) {
-              var m = ready.filter(function (x) { return x.record === p; })[0];
-              return '<tr><td class="mono">' + esc(p.code) + '</td><td>' + esc(p.contact) + '</td>' +
-                '<td>' + (m
-                  ? '<span class="badge ok">exact match in Xero</span>'
-                  : '<span class="badge bad">no contact with this name</span>') + '</td></tr>';
-            }).join('') + '</table></div>'
-          : '') +
-        '</div>';
-    })() +
-
+    xeroLinkPanel(list) +
     /* The statutory particulars every document needs, taken from where they
        already are rather than typed sixty-two times. */
     '<div style="margin-top:16px"><b>Complete the pharmacy particulars</b>' +
@@ -4671,6 +4635,53 @@ function addPharmaciesFromXero() {
       return DB.audit('pharmacies_added_from_xero', { added: made, failed: failed });
     })
     .catch(function (e) { err(e); refreshMaster(); });
+}
+
+/* Which pharmacies are joined to a Xero contact by Xero's own identifier.
+ *
+ * "Connected to Xero" and "this pharmacy IS that contact" are two different
+ * facts, and only the first was ever on a screen - so a master with nothing
+ * linked looked exactly like one that was fully linked. Drawn from the master
+ * alone, so it still reports the truth when no contact list has been pulled;
+ * the list only decides whether anything can be linked right now. */
+function xeroLinkPanel(list) {
+  var st = CB.xeroLinkState(ST.master.pharmacies);
+  var ready = CB.xeroContactLinks(list || [], ST.master.pharmacies);
+  return '<div style="margin-top:16px"><b>Xero contact &rarr; pharmacy</b>' +
+    '<div class="hint">Xero issues every contact an identifier that survives a rename. ' +
+    'Held against it, a document can never land on the wrong contact; matched by name, a ' +
+    'single character out of place makes Xero quietly create a second one and bill that ' +
+    'instead.</div>' +
+    '<div class="grid g3" style="margin-top:9px">' +
+    kpi('Linked by Xero ID', String(st.linked) + ' / ' + st.total) +
+    kpi('Matched by name only', String(st.unlinked.length), st.unlinked.length ? 'warn' : '') +
+    kpi('Can be linked now', String(ready.length)) +
+    '</div>' +
+    (!(list || []).length
+      ? '<div class="hint" style="margin-top:9px">Press <b>Load from Xero</b> above to see which ' +
+        'of these can be linked. A CSV export cannot be used for this &mdash; it carries no Xero IDs.</div>'
+      : ready.length
+        ? '<div class="row" style="margin-top:9px"><button class="btn sm ro-only" ' +
+          'onclick="linkXeroContacts()">Link ' + ready.length +
+          ' pharmacy(s) to their Xero contact</button>' +
+          '<span class="mut">exact name matches only — anything less is left for a person</span></div>'
+        : st.unlinked.length
+          ? '<div class="hint" style="margin-top:9px">None of the remaining ' + st.unlinked.length +
+            ' can be linked automatically: no Xero contact carries exactly that registered name. ' +
+            'Correct the name on either side, or add the contact in Xero.</div>'
+          : '<div class="hint" style="margin-top:9px">Every active pharmacy is linked.</div>') +
+    (st.unlinked.length && (list || []).length
+      ? '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
+        '<tr><th>Code</th><th>Registered name here</th><th>Status</th></tr>' +
+        st.unlinked.slice(0, 200).map(function (p) {
+          var m = ready.filter(function (x) { return x.record === p; })[0];
+          return '<tr><td class="mono">' + esc(p.code) + '</td><td>' + esc(p.contact) + '</td>' +
+            '<td>' + (m
+              ? '<span class="badge ok">exact match in Xero</span>'
+              : '<span class="badge bad">no contact with this name</span>') + '</td></tr>';
+        }).join('') + '</table></div>'
+      : '') +
+    '</div>';
 }
 
 /* Write Xero's identifier onto every pharmacy whose registered name matches a

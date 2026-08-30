@@ -2889,7 +2889,11 @@
       }).sort(function (a, b) { return b.gross - a.gross; });
 
       out.push({
-        kind: 'duplicate',
+        /* NOT 'duplicate'. That word belongs to the same file dropped twice, and
+           its remedy - remove one of the files - is impossible here: there is
+           one file and two tabs inside it. An operator handed an instruction
+           they cannot carry out stops, which is what happened. */
+        kind: 'collision',
         rows: rows,
         text: rows.length + ' pharmacy record(s) are claimed by more than one sheet, so one shop ' +
           'would be billed for another\u2019s goods. Each one is a separate decision: two tabs for ' +
