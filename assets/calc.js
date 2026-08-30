@@ -1621,6 +1621,57 @@
    * single most common reason an import is rejected, so we read them instead.
    * rows = array of arrays, header first. Column roles are found by header word,
    * with a value-based fallback for the name column. */
+  /* Which records are joined to Xero by its own identifier, and which only by
+   * a name. Counted rather than assumed, because "connected to Xero" and "this
+   * pharmacy is linked to a contact" are two different facts and only the first
+   * was ever on screen. */
+  function xeroLinkState(list) {
+    var linked = 0, unlinked = [];
+    (list || []).forEach(function (p) {
+      if (p.active === false) return;
+      if (String(p.xeroContactId || '').trim()) linked++;
+      else unlinked.push(p);
+    });
+    return { linked: linked, unlinked: unlinked, total: linked + unlinked.length };
+  }
+
+  /* The id Xero issued, for records we can identify beyond doubt.
+   *
+   * Only an EXACT name match is linked automatically. A near match is what
+   * creates a duplicate contact in the first place, and a link is harder to
+   * notice being wrong than a name is - so anything less than exact is left for
+   * a person, the same rule the pharmacy matcher follows. */
+  function xeroContactLinks(contacts, records, nameFields) {
+    nameFields = nameFields || ['contact', 'trading'];
+    var byName = {};
+    (contacts || []).forEach(function (c) {
+      var k = normKey(c && c.name);
+      if (!k || !c.id) return;
+      if (k in byName) { byName[k] = null; return; }   // two contacts, one name: decide nothing
+      byName[k] = c;
+    });
+    var taken = {};
+    (records || []).forEach(function (r) {
+      var id = String(r.xeroContactId || '').trim();
+      if (id) taken[id] = true;
+    });
+
+    var out = [];
+    (records || []).forEach(function (r) {
+      if (r.active === false) return;
+      if (String(r.xeroContactId || '').trim()) return;     // already linked
+      var hit = null;
+      for (var i = 0; i < nameFields.length && !hit; i++) {
+        var k = normKey(r[nameFields[i]]);
+        if (k && byName[k]) hit = byName[k];
+      }
+      if (!hit || taken[hit.id]) return;                    // one contact, one record
+      taken[hit.id] = true;
+      out.push({ record: r, contact: hit, id: hit.id, matchedName: hit.name });
+    });
+    return out;
+  }
+
   function parseXeroContacts(rows) {
     if (!rows || rows.length < 2) return [];
     var hdr = (rows[0] || []).map(function (h) {
@@ -1744,6 +1795,11 @@
       return !taken[normKey(c.name)];                        // that name is here
     }).map(function (c) {
       return {
+        /* Created from the contact itself, so it is linked to it from the
+           start - the one case where there is no doubt at all about which
+           Xero contact this record is. Empty from a CSV export, which carries
+           no ContactID; those get linked by name afterwards. */
+        xeroContactId: c.id || '',
         code: String(c.accountNumber).toUpperCase().trim(),
         contact: c.name,
         /* Xero has one name. The trading name is a local idea, so it starts as
@@ -3393,6 +3449,7 @@
     issuerHTML: issuerHTML, partyKV: partyKV, statutoryWarnings: statutoryWarnings,
     statementHTML: statementHTML, statementDoc: statementDoc, STMT_CSS: STMT_CSS, esc: esc,
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
+    xeroLinkState: xeroLinkState, xeroContactLinks: xeroContactLinks,
     xeroContactsToAdd: xeroContactsToAdd,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,
     xeroPayoutBills: xeroPayoutBills, toCSV: toCSV, invNo: invNo,

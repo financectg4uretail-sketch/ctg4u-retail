@@ -318,8 +318,8 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=3dfa2c89cd"></script>
-<script src="assets/calc.js?v=8fed2f85c1"></script>
+<script src="assets/db.js?v=814a0d3161"></script>
+<script src="assets/calc.js?v=dc89207cb2"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'e4bf4317ed2a';
+  var MINE = 'b84780ba9cd6';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -4463,6 +4463,51 @@ function renderXeroContacts() {
         ' as pharmacies</button></div></div>';
     })() +
 
+    /* Which pharmacies are joined to a Xero contact by Xero's own identifier.
+     *
+     * "Connected to Xero" and "this pharmacy IS that contact" are two different
+     * facts and only the first was ever on a screen, so a master with no links
+     * at all looked exactly like a working one. It matters because an invoice
+     * whose *ContactName Xero does not recognise is not refused - Xero creates a
+     * second contact under that name and posts against it, silently. */
+    (function () {
+      var st = CB.xeroLinkState(ST.master.pharmacies);
+      var ready = CB.xeroContactLinks(list, ST.master.pharmacies);
+      return '<div style="margin-top:16px"><b>Xero contact &rarr; pharmacy</b>' +
+        '<div class="hint">Xero issues every contact an identifier that survives a rename. ' +
+        'Held against it, a document can never land on the wrong contact; matched by name, a ' +
+        'single character out of place makes Xero quietly create a second one and bill that ' +
+        'instead.</div>' +
+        '<div class="grid g3" style="margin-top:9px">' +
+        kpi('Linked by Xero ID', String(st.linked) + ' / ' + st.total) +
+        kpi('Matched by name only', String(st.unlinked.length),
+            st.unlinked.length ? 'warn' : '') +
+        kpi('Can be linked now', String(ready.length)) +
+        '</div>' +
+        (ready.length
+          ? '<div class="row" style="margin-top:9px"><button class="btn sm ro-only" ' +
+            'onclick="linkXeroContacts()">Link ' + ready.length +
+            ' pharmacy(s) to their Xero contact</button>' +
+            '<span class="mut">exact name matches only \u2014 anything less is left for a person</span></div>'
+          : st.unlinked.length
+            ? '<div class="hint" style="margin-top:9px">None of the remaining ' + st.unlinked.length +
+              ' can be linked automatically: no Xero contact carries exactly that registered name. ' +
+              'Correct the name on either side, or add the contact in Xero.</div>'
+            : '<div class="hint" style="margin-top:9px">Every active pharmacy is linked.</div>') +
+        (st.unlinked.length
+          ? '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
+            '<tr><th>Code</th><th>Registered name here</th><th>Status</th></tr>' +
+            st.unlinked.slice(0, 200).map(function (p) {
+              var m = ready.filter(function (x) { return x.record === p; })[0];
+              return '<tr><td class="mono">' + esc(p.code) + '</td><td>' + esc(p.contact) + '</td>' +
+                '<td>' + (m
+                  ? '<span class="badge ok">exact match in Xero</span>'
+                  : '<span class="badge bad">no contact with this name</span>') + '</td></tr>';
+            }).join('') + '</table></div>'
+          : '') +
+        '</div>';
+    })() +
+
     /* The statutory particulars every document needs, taken from where they
        already are rather than typed sixty-two times. */
     '<div style="margin-top:16px"><b>Complete the pharmacy particulars</b>' +
@@ -4624,6 +4669,52 @@ function addPharmaciesFromXero() {
         alert('These were not added:' + NL + NL + failed.join(NL));
       }
       return DB.audit('pharmacies_added_from_xero', { added: made, failed: failed });
+    })
+    .catch(function (e) { err(e); refreshMaster(); });
+}
+
+/* Write Xero's identifier onto every pharmacy whose registered name matches a
+ * contact EXACTLY. Nothing else - a near match is what produces a duplicate
+ * contact in the first place, and a wrong link is harder to spot than a wrong
+ * name because nothing downstream ever questions it again. */
+function linkXeroContacts() {
+  if (!requireWrite()) return;
+  var list = ST.xeroContacts || [];
+  if (!list.length) { toast('Load the Xero contacts first', 'warn'); return; }
+  if (!list.some(function (c) { return c.id; })) {
+    toast('This contact list carries no Xero IDs \u2014 use "Load from Xero", not a CSV export', 'warn');
+    return;
+  }
+
+  var links = CB.xeroContactLinks(list, ST.master.pharmacies);
+  if (!links.length) { toast('Nothing new can be linked by an exact name', 'ok'); return; }
+
+  var NL = String.fromCharCode(10);
+  if (!confirm('Link ' + links.length + ' pharmacy(s) to their Xero contact?' + NL + NL +
+      links.slice(0, 10).map(function (x) { return '  ' + x.record.code + '  ' + x.matchedName; }).join(NL) +
+      (links.length > 10 ? NL + '  and ' + (links.length - 10) + ' more' : '') + NL + NL +
+      'Only exact name matches. Nothing else about these records changes.')) return;
+
+  var now = new Date().toISOString(), failed = [];
+  toast('Linking ' + links.length + ' pharmacy(s)\u2026');
+  links.reduce(function (chain, x) {
+    return chain.then(function () {
+      return DB.savePharmacy({ id: x.record.id, code: x.record.code,
+        contact: x.record.contact, trading: x.record.trading,
+        xeroContactId: x.id, xeroSyncedAt: now })
+        .catch(function (e) {
+          failed.push(x.record.code + ' \u2014 ' + (e && e.message ? e.message : String(e)));
+        });
+    });
+  }, Promise.resolve())
+    .then(refreshMaster)
+    .then(function () {
+      renderPharmacies(); renderXeroContacts();
+      var made = links.length - failed.length;
+      toast(made + ' pharmacy(s) linked to Xero' +
+        (failed.length ? ', ' + failed.length + ' refused' : ''), failed.length ? 'warn' : 'ok');
+      if (failed.length) alert('These were not linked:' + NL + NL + failed.join(NL));
+      return DB.audit('xero_contacts_linked', { linked: made, failed: failed });
     })
     .catch(function (e) { err(e); refreshMaster(); });
 }

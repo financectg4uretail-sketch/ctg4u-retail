@@ -226,6 +226,10 @@
               address: p.address || '',
               town: p.town || '', lat: p.lat, lng: p.lng,
               trackingOption: p.tracking_option || '',
+              /* Xero's own identifier for this contact. Null until somebody
+                 links it; every screen that shows the link reads this. */
+              xeroContactId: p.xero_contact_id || '',
+              xeroSyncedAt: p.xero_synced_at || null,
               aliases: p.aliases || [], active: p.active
             };
           }),
@@ -238,6 +242,7 @@
               address: b.address || '', phone: b.phone || '',
               brn: b.brn || '', taxNo: b.tax_no || '',
               xeroSyncedAt: b.xero_synced_at || null,
+              xeroContactId: b.xero_contact_id || '',
               /* what the pharmacies call this brand on their own sheets */
               aliases: b.aliases || [],
               trackingOption: b.tracking_option || '', active: b.active
@@ -265,6 +270,8 @@
         tin: ['tin', 'blank'], brn: ['brn', 'blank'], email: ['email', 'blank'],
         state: ['state', 'blank'], trackingOption: ['tracking_option', 'blank'],
         town: ['town', 'blank'], address: ['address', 'blank'], lat: 'lat', lng: 'lng',
+        xeroContactId: ['xero_contact_id', 'blank'],
+        xeroSyncedAt: ['xero_synced_at', 'blank'],
         aliases: 'aliases'
       });
       if (Object.prototype.hasOwnProperty.call(p, 'active')) row.active = p.active !== false;
