@@ -2594,8 +2594,20 @@
   function blockWarnings(packages, c) {
     c = cfg(c);
     var out = [];
+    /* Only what is actually going to be billed.
+     *
+     * `use` is the tick beside each block on the import screen, and unticking one
+     * is the operator's whole remedy for the faults reported here - two sheets
+     * landing on one pharmacy, the same file dropped twice. Judging the batch on
+     * every block regardless left them with a warning that could not be cleared
+     * and a button that stayed disabled whatever they did: the one action the
+     * message asks for had no effect on the message.
+     *
+     * A block with `use` undefined counts, because that is a block from a caller
+     * that has no such concept - the tests, and anything reading a workbook
+     * outside the import screen. */
     var live = (packages || []).filter(function (p) {
-      return p && p.parsed && p.parsed.lines && p.parsed.lines.length;
+      return p && p.use !== false && p.parsed && p.parsed.lines && p.parsed.lines.length;
     });
 
     /* 1. the same shop, the same brand, the same period, twice. Two copies of
