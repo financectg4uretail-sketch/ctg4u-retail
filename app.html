@@ -319,7 +319,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=3dfa2c89cd"></script>
-<script src="assets/calc.js?v=014bc91706"></script>
+<script src="assets/calc.js?v=a99c5240f2"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '42364553ecaf';
+  var MINE = '54421d8a1fb5';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1938,13 +1938,37 @@ function renderPackages() {
   }
 
   if (unmatched.length) {
+    /* "Add them on the Master data tab" is only half the answer, and on the
+       August file it was the wrong half for sixteen shops. A pharmacy can be in
+       the master already under a registered name that shares nothing with the
+       shop's own: Farmasi Rasah Jaya is FARMASI RJ SDN BHD, National Pharmacy
+       (Sunway 163) is KIARA HEALTHCARE SDN BHD, Love Life Pharmacy is TK MEDICAL
+       SUPPLIES SDN BHD. No matcher should bridge those - guessing pays a company
+       nobody chose - so a person says it once and the answer is kept as an
+       alias, which is exactly how the brand column beside it already works. */
+    var pharmList = ST.master.pharmacies.slice().sort(function (a, b) {
+      return (a.trading || '') < (b.trading || '') ? -1 : 1;
+    });
     h += '<div class="note warn"><b>' + unmatched.length + ' sheet(s) are not in the pharmacy master.</b> ' +
-      'Add them on the Master data tab, with the registered name exactly as Xero has it.' +
-      '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
-      '<tr><th>Sheet</th><th>Registered name on the sheet</th><th class="num">Gross</th></tr>' +
+      'If the shop is already here under a different registered name, say which &mdash; it is ' +
+      'remembered, so next month it resolves itself. If it is genuinely new, add it on the ' +
+      'Master data tab, or bring it in from Xero there.' +
+      '<div class="scroll" style="max-height:260px;margin-top:9px"><table>' +
+      '<tr><th>Sheet</th><th>Registered name on the sheet</th><th class="num">Gross</th>' +
+      '<th>This shop is&hellip;</th></tr>' +
       unmatched.map(function (r) {
-        return '<tr><td>' + esc(r.P.name) + '</td><td>' + esc(r.P.parsed.pharmacyContact || '—') +
-          '</td><td class="num">' + M(r.x.gross) + '</td></tr>';
+        /* the name the alias is stored under is the one that failed to match,
+           so the same sheet resolves next time without being asked again */
+        var raw = (r.P.parsed.pharmacyTrading || r.P.name || '').replace(/'/g, '&#39;');
+        return '<tr class="' + (on(r) ? '' : 'mut') + '"><td>' + esc(r.P.name) + '</td><td>' +
+          esc(r.P.parsed.pharmacyContact || '—') + '</td><td class="num">' + M(r.x.gross) + '</td>' +
+          '<td><select ' + (CAN_WRITE ? '' : 'disabled ') +
+          'onchange="mapSheetPharmacy(this,&#39;' + esc(raw) + '&#39;)">' +
+          '<option value="">— not in the master —</option>' +
+          pharmList.map(function (p) {
+            return '<option value="' + esc(p.code) + '">' + esc(p.trading) +
+              (p.contact && p.contact !== p.trading ? ' — ' + esc(p.contact) : '') + '</option>';
+          }).join('') + '</select></td></tr>';
       }).join('') + '</table></div></div>';
   }
 
@@ -2044,6 +2068,40 @@ function renderPackages() {
 }
 
 function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* Same as mapPharmacy on the Review tab, redrawing the import screen instead.
+ * The alias is stored against the pharmacy, so it settles this sheet and every
+ * future one carrying the same name - the file does not have to change and
+ * nobody is asked twice. */
+function mapSheetPharmacy(sel, rawName) {
+  if (!sel.value || !requireWrite()) return;
+  var p = ST.master.pharmacies.filter(function (x) { return x.code === sel.value; })[0];
+  if (!p) return;
+  if (!p.id) { toast('That pharmacy has no record to attach the name to', 'bad'); return; }
+
+  sel.disabled = true;
+  DB.addPharmacyAlias(p.id, rawName)
+    .then(function () { return refreshMaster(); })
+    .then(function () {
+      /* re-resolve every block, so one answer settles all of that shop's brands
+         at once rather than leaving five of them still asking */
+      var n = 0;
+      ST.packages.forEach(function (q) {
+        if (q.pharmacy) return;
+        var got = CB.pickPharmacy(q.parsed.pharmacyContact,
+                                  q.parsed.pharmacyTrading || q.name, ST.master.pharmacies);
+        if (got.pharmacy) { q.pharmacy = got.pharmacy; q.matchedOn = got.how; q.pharmacyRivals = null; n++; }
+      });
+      renderPackages();
+      toast('"' + rawName + '" \u2192 ' + p.trading + ' \u2014 saved' +
+        (n > 1 ? ', and ' + n + ' block(s) resolved' : ''), 'ok');
+      return DB.audit('pharmacy_alias_added', { pharmacy: p.code, alias: rawName, blocks: n });
+    })
+    .catch(function (e) {
+      sel.disabled = false;
+      toast('Could not save that name: ' + e.message, 'bad');
+    });
+}
 
 /* Take the rate the sheets state.
  *
@@ -4312,6 +4370,35 @@ function renderXeroContacts() {
       }).join('') + '</table></div>'
       : '<div class="note" style="border-color:var(--ok);background:#00a99d0f">✓ Every pharmacy already matches a Xero contact exactly.</div>') +
 
+    /* Contacts Xero has and this application does not.
+       Read straight off the account number, so a supplier is never mistaken for
+       a pharmacy and a new record gets the code Xero already uses. */
+    (function () {
+      var add = CB.xeroContactsToAdd(list, ST.master.pharmacies, ST.master.projects);
+      if (!add.length) {
+        return '<div class="note" style="margin-top:16px">Every PHM contact in Xero already ' +
+          'has a pharmacy here.</div>';
+      }
+      var noAcct = list.filter(function (c) { return !String(c.accountNumber || '').trim(); }).length;
+      return '<div style="margin-top:16px"><b>' + add.length + ' pharmacy(s) are in Xero and not here</b>' +
+        '<div class="hint">Created from the Xero contact itself &mdash; the account number becomes the ' +
+        'code, so both systems keep the same numbering. Nothing already here is touched.' +
+        (noAcct ? ' ' + noAcct + ' contact(s) in this list carry no account number and are ignored; ' +
+          'a contact export from Xero carries them.' : '') + '</div>' +
+        '<div class="scroll" style="max-height:260px;margin-top:9px"><table>' +
+        '<tr><th>Code</th><th>Registered name</th><th>Email</th><th>TIN</th><th>Company no.</th><th>Address</th></tr>' +
+        add.map(function (a) {
+          return '<tr><td class="mono">' + esc(a.code) + '</td><td>' + esc(a.contact) + '</td>' +
+            '<td class="mut">' + esc(a.email || '—') + '</td>' +
+            '<td class="mono">' + esc(a.tin || '—') + '</td>' +
+            '<td class="mono">' + esc(a.brn || '—') + '</td>' +
+            '<td class="mut">' + esc((a.address || '—').split('\n')[0]).slice(0, 44) + '</td></tr>';
+        }).join('') + '</table></div>' +
+        '<div class="row" style="margin-top:9px">' +
+        '<button class="btn sm ro-only" onclick="addPharmaciesFromXero()">+ Add all ' + add.length +
+        ' as pharmacies</button></div></div>';
+    })() +
+
     /* The statutory particulars every document needs, taken from where they
        already are rather than typed sixty-two times. */
     '<div style="margin-top:16px"><b>Complete the pharmacy particulars</b>' +
@@ -4419,6 +4506,60 @@ function fillParticularsFromXero() {
       renderStatutoryWarnings();
       toast(todo.length + ' pharmacy(s) completed from Xero', 'ok');
       return DB.audit('xero_particulars_filled', { pharmacies: todo.length });
+    })
+    .catch(function (e) { err(e); refreshMaster(); });
+}
+
+/* Bring Xero's pharmacy contacts in as pharmacies.
+ *
+ * The one direction this application never had. `matchXeroContacts` walks the
+ * pharmacies looking for a contact; nothing walked the contacts looking for a
+ * pharmacy, so the twenty-six created in Xero on 29 August could be seen in the
+ * list and brought in by no means at all. Brand owners have had
+ * addBrandOwnerFromXero since the beginning.
+ *
+ * Creates only. A contact whose name or code is already here is skipped rather
+ * than merged, because two records for one company is a mess a person has to
+ * unpick and an overwritten one is a fact quietly lost. */
+function addPharmaciesFromXero() {
+  if (!requireWrite()) return;
+  var list = ST.xeroContacts || [];
+  if (!list.length) { toast('Load the Xero contacts first', 'warn'); return; }
+
+  var add = CB.xeroContactsToAdd(list, ST.master.pharmacies, ST.master.projects);
+  if (!add.length) { toast('Every PHM contact in Xero already has a pharmacy here', 'ok'); return; }
+
+  var NL = String.fromCharCode(10);
+  var thin = add.filter(function (a) { return !a.tin || !a.brn || !a.address; });
+  if (!confirm('Add ' + add.length + ' pharmacy(s) from Xero?' + NL + NL +
+      add.slice(0, 12).map(function (a) { return '  ' + a.code + '  ' + a.contact; }).join(NL) +
+      (add.length > 12 ? NL + '  and ' + (add.length - 12) + ' more' : '') + NL + NL +
+      (thin.length ? thin.length + ' of them are missing a TIN, a company number or an address, ' +
+        'which every invoice and statement has to carry. They are still added; fill the gaps in ' +
+        'Xero and use "Fill missing address and TIN" afterwards.' + NL + NL : '') +
+      'Nothing already here is changed.')) return;
+
+  toast('Adding ' + add.length + ' pharmacy(s)\u2026');
+  var failed = [];
+  add.reduce(function (chain, a) {
+    return chain.then(function () {
+      return DB.savePharmacy(a).catch(function (e) {
+        failed.push(a.code + ' ' + a.contact + ' \u2014 ' + (e && e.message ? e.message : String(e)));
+      });
+    });
+  }, Promise.resolve())
+    .then(refreshMaster)
+    .then(function () {
+      renderPharmacies(); renderXeroContacts(); renderStatutoryWarnings();
+      var made = add.length - failed.length;
+      toast(made + ' pharmacy(s) added from Xero' +
+        (failed.length ? ', ' + failed.length + ' refused' : ''), failed.length ? 'warn' : 'ok');
+      /* Named, not counted: a row that did not save is a shop that will not
+         bill, and a total hides which one. */
+      if (failed.length) {
+        alert('These were not added:' + NL + NL + failed.join(NL));
+      }
+      return DB.audit('pharmacies_added_from_xero', { added: made, failed: failed });
     })
     .catch(function (e) { err(e); refreshMaster(); });
 }

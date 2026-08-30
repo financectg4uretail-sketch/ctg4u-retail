@@ -1566,6 +1566,11 @@
     var iEmail = find('emailaddress', 'email');
     var iAcct = find('accountnumber', 'accountnumber');
     var iTax = find('taxnumber', 'taxnumber');
+    /* Xero's own words: "Company registration number". It is a column in the
+       contact export and on the contact itself, and it is the BRN that has to
+       print on an invoice - so a record created from a Xero contact without it
+       is a record that cannot issue a compliant document. */
+    var iCoNo = find('companynumber', 'companynumber');
     /* Xero exports the postal address across several columns and a real export
        has four address lines where the sample has one.
        
@@ -1621,12 +1626,68 @@
         email: iEmail >= 0 ? String(r[iEmail] == null ? '' : r[iEmail]).trim() : '',
         accountNumber: iAcct >= 0 ? String(r[iAcct] == null ? '' : r[iAcct]).trim() : '',
         taxNumber: iTax >= 0 ? String(r[iTax] == null ? '' : r[iTax]).trim() : '',
+        companyNumber: iCoNo >= 0 ? String(r[iCoNo] == null ? '' : r[iCoNo]).trim() : '',
         address: addrCols.map(function (i) {
           return String(r[i] == null ? '' : r[i]).trim();
         }).filter(Boolean).join('\n')
       });
     });
     return out;
+  }
+
+  /* The other direction: a Xero contact that no pharmacy record answers to.
+   *
+   * matchXeroContacts walks the PHARMACIES and finds a contact for each, which
+   * answers "is this pharmacy in Xero". Nothing ever asked the reverse, so the
+   * twenty-six contacts created in Xero on 29 August were invisible to this
+   * application - it could see them in the list and had no way to bring any of
+   * them in. Brand owners had `addBrandOwnerFromXero` all along; pharmacies had
+   * no equivalent, and that asymmetry is the whole bug.
+   *
+   * A pharmacy is recognised by its account number. The operator numbers every
+   * pharmacy contact PHM-0xx and every partner company 300-xxx, so the prefix
+   * says which is which without guessing from the name - and it carries the code
+   * the new record should have, which is what keeps the two systems lined up.
+   *
+   * Contacts already claimed by a pharmacy or a brand owner are left alone,
+   * matched on normKey so punctuation and Sdn Bhd spelling do not create a
+   * second copy of a company that is already here.
+   */
+  function xeroContactsToAdd(contacts, pharmacies, projects, prefix) {
+    prefix = (prefix || 'PHM-').toUpperCase();
+    var taken = {};
+    (pharmacies || []).forEach(function (p) {
+      if (p.contact) taken[normKey(p.contact)] = 1;
+      if (p.trading) taken[normKey(p.trading)] = 1;
+      if (p.code) taken['#' + String(p.code).toUpperCase()] = 1;
+    });
+    (projects || []).forEach(function (b) {
+      if (b.xeroContact) taken[normKey(b.xeroContact)] = 1;
+      if (b.name) taken[normKey(b.name)] = 1;
+    });
+
+    return (contacts || []).filter(function (c) {
+      var acct = String(c.accountNumber || '').toUpperCase();
+      if (acct.indexOf(prefix) !== 0) return false;          // not a pharmacy
+      if (taken['#' + acct]) return false;                   // that code is here
+      return !taken[normKey(c.name)];                        // that name is here
+    }).map(function (c) {
+      return {
+        code: String(c.accountNumber).toUpperCase().trim(),
+        contact: c.name,
+        /* Xero has one name. The trading name is a local idea, so it starts as
+           the registered one and the operator shortens it if they want to - an
+           invented short form here would be a second version of the truth. */
+        trading: c.name,
+        email: c.email || '',
+        tin: c.taxNumber || '',
+        brn: c.companyNumber || '',
+        address: c.address || '',
+        /* the column is NOT NULL DEFAULT '{}' so the database would supply this,
+           but a record handed to anything else should not depend on that */
+        aliases: []
+      };
+    }).sort(function (a, b) { return a.code < b.code ? -1 : a.code > b.code ? 1 : 0; });
   }
 
   /* Match every master pharmacy to a real Xero contact. Nothing is applied here -
@@ -2531,6 +2592,33 @@
 
   function pickPharmacy(contactOnSheet, nameOnTab, pharmacies) {
     pharmacies = pharmacies || [];
+
+    /* A confirmed name first, and it wins outright.
+     *
+     * When a shop's own name shares nothing with its registered one - Farmasi
+     * Rasah Jaya is FARMASI RJ SDN BHD, National Pharmacy (Sunway 163) is KIARA
+     * HEALTHCARE SDN BHD - no similarity can bridge it and none should try. The
+     * operator says it once and it is kept as an alias, exactly as the brand
+     * column works. resolveLines has indexed pharmacy aliases all along; this
+     * path never looked at them, so saying it once changed nothing and the same
+     * sheet asked again every month.
+     *
+     * Two pharmacies claiming one alias is the master contradicting itself, and
+     * the honest answer is to decide nothing - the same rule matchBrandOwner
+     * applies to a shared brand alias. */
+    var byAlias = function (raw) {
+      var k = normKey(raw);
+      if (!k) return null;
+      var hits = pharmacies.filter(function (p) {
+        return (p.aliases || []).some(function (a) { return normKey(a) === k; });
+      });
+      if (!hits.length) return null;
+      if (hits.length > 1) return { pharmacy: null, how: null, rivals: hits };
+      return { pharmacy: hits[0], how: 'confirmed name', rivals: null };
+    };
+    var confirmed = byAlias(nameOnTab) || byAlias(contactOnSheet);
+    if (confirmed) return confirmed;
+
     var byContact = contactOnSheet
       ? bestMatch(contactOnSheet, pharmacies, ['contact', 'trading', 'code'], 0.72) : null;
     var byName = nameOnTab
@@ -3200,6 +3288,7 @@
     issuerHTML: issuerHTML, partyKV: partyKV, statutoryWarnings: statutoryWarnings,
     statementHTML: statementHTML, statementDoc: statementDoc, STMT_CSS: STMT_CSS, esc: esc,
     parseXeroContacts: parseXeroContacts, matchXeroContacts: matchXeroContacts,
+    xeroContactsToAdd: xeroContactsToAdd,
     xeroPharmacyInvoices: xeroPharmacyInvoices, xeroServiceInvoices: xeroServiceInvoices,
     xeroPayoutBills: xeroPayoutBills, toCSV: toCSV, invNo: invNo,
     detectColumns: detectColumns,
