@@ -1800,6 +1800,14 @@ function renderPackages() {
      complete month dated to the wrong one. */
   var batch = CB.blockWarnings(ST.packages, ST.cfg);
 
+  /* The lists below show EVERY block, because a shop left out of a month has to
+     be visible - that is the whole reason they are listed with their gross. The
+     gate on the button reads only the ticked ones, because unticking is the
+     operator's answer to what the lists say, and a remedy that changes nothing
+     is not a remedy. Two words, and they must not be confused: `on` is what is
+     about to be billed. */
+  var on = function (r) { return r.P.use !== false; };
+
   var billable = rowsOut.filter(function (r) { return !r.zero && r.P.use; });
   /* A block with no brand owner cannot be settled to anybody, so it cannot be
      billed either - the pharmacy would be invoiced for goods with no owner.
@@ -2000,8 +2008,22 @@ function renderPackages() {
      and no check after this point can see it. The period mismatch is allowed
      through on purpose - a late file legitimately gets billed in a later month
      sometimes - but it is said loudly first. */
-  var ready = billable.length && !broken.length && !unmatched.length && !undecided.length && !noBrand.length &&
+  /* A duplicate still blocks outright: it doubles a month and nothing after
+     this point can see it. The rest are judged on what is ticked. */
+  var ready = billable.length &&
+    !broken.filter(on).length && !unmatched.filter(on).length &&
+    !undecided.filter(on).length && !noBrand.filter(on).length &&
     !batch.some(function (w) { return w.kind === 'duplicate'; });
+  /* Unticking is now the way past this screen, so what it costs is stated.
+     A shop dropped from a month is the silent-omission failure this project has
+     had before; it is not silent if the money is on the button's own line. */
+  var left = rowsOut.filter(function (r) { return !r.zero && !on(r); });
+  if (left.length) {
+    h += '<div class="note"><b>' + left.length + ' block(s) are unticked</b> and will not be billed &mdash; ' +
+      M(CB.sumMoney(left, function (r) { return r.x.gross; })) + ' of sales. ' +
+      'They stay in the file and can be billed in a later run once their pharmacy exists.</div>';
+  }
+
   h += '<div class="row" style="margin-top:14px">' +
     '<button class="btn" ' + (ready ? '' : 'disabled') + ' onclick="buildFromPackages()">' +
     'Use these ' + billable.length + ' billing block(s) &rarr;</button>' +
@@ -2010,11 +2032,11 @@ function renderPackages() {
        back. So it is said first even when several are true at once. */
     (batch.some(function (w) { return w.kind === 'duplicate'; })
         ? '<span class="mut">the same sales are in here twice &mdash; remove the duplicate file</span>'
-      : broken.length ? '<span class="mut">fix the disagreeing blocks first</span>'
-      : undecided.length ? '<span class="mut">say which pharmacy those sheets belong to first</span>'
-      : unmatched.length ? '<span class="mut">add the missing pharmacies first</span>'
-      : noBrand.length ? '<span class="mut">' + noBrand.length +
-            ' block(s) still need a brand owner &mdash; each one decides who gets paid</span>'
+      : broken.filter(on).length ? '<span class="mut">fix the disagreeing blocks first, or untick them</span>'
+      : undecided.filter(on).length ? '<span class="mut">say which pharmacy those sheets belong to first</span>'
+      : unmatched.filter(on).length ? '<span class="mut">add the missing pharmacies first, or untick them</span>'
+      : noBrand.filter(on).length ? '<span class="mut">' + noBrand.filter(on).length +
+            ' ticked block(s) still need a brand owner &mdash; each one decides who gets paid</span>'
         : !billable.length ? '<span class="mut">nothing billable in this file</span>' : '') +
     '</div></div>';
 
