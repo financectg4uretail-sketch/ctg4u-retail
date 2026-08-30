@@ -164,7 +164,8 @@
       <span class="mono">*ContactName</span> strings are read straight off it &mdash; no typing, so an import can never
       be rejected for a mis-typed name. Nothing is sent anywhere; the file is read in this browser.</div>
     <div class="row">
-      <button class="btn sm" onclick="$('#fileXeroContacts').click()">⬆ Import Xero contact export</button>
+      <button class="btn sm ro-only" onclick="loadXeroContacts(this)">⭳ Load from Xero</button>
+      <button class="btn sm ghost" onclick="$('#fileXeroContacts').click()">⬆ Import Xero contact export</button>
       <span class="mut" id="xcStatus">no contact list loaded</span>
       <input type="file" id="fileXeroContacts" accept=".csv,.xlsx,.xls" hidden>
     </div>
@@ -4965,6 +4966,38 @@ function xeroWhy(e) {
  * already linked to. The link is the xeroContact name, which is the same string
  * the invoices are addressed with - so a brand owner whose statement shows the
  * wrong address is one whose invoices were going to the wrong contact too. */
+/* The pharmacy contacts, read from the organisation rather than from a file
+ * somebody exported at some point.
+ *
+ * A CSV export is a snapshot and carries no ContactID: it goes stale silently,
+ * and the link between a pharmacy and its Xero contact cannot be made from one
+ * at all. The `contacts` action has always returned the id; nothing was asking
+ * it for the pharmacies. */
+function loadXeroContacts(btn) {
+  if (!requireWrite()) return;
+  if (XERO_BUSY) { toast('A Xero read is already running \u2014 give it a moment', 'warn'); return; }
+  xeroBusy(true, btn);
+  toast('Reading contacts from Xero\u2026');
+  DB.xero.call('contacts').then(function (r) {
+    var all = r.contacts || [];
+    /* Every contact, not only the PHM- ones: applyXeroNames and the link both
+       match on the name, and a pharmacy whose account number was never set in
+       Xero would otherwise be invisible to them. xeroContactsToAdd does its own
+       filtering on the account number, where that filter belongs. */
+    ST.xeroContacts = all;
+    xeroBusy(false, btn);
+    renderXeroContacts();
+    var coded = all.filter(function (c) {
+      return /^PHM-/i.test(String(c.accountNumber || '').trim());
+    }).length;
+    toast(all.length + ' contact(s) read from Xero, ' + coded + ' with a PHM- code', 'ok');
+    return DB.audit('xero_contacts_loaded', { total: all.length, pharmacyCoded: coded });
+  }, function (e) {
+    xeroBusy(false, btn);
+    toast(xeroWhy(e), 'bad');
+  });
+}
+
 function pullBrandOwnerDetails(btn) {
   if (!requireWrite()) return;
   if (XERO_BUSY) { toast('A Xero read is already running — give it a moment', 'warn'); return; }
