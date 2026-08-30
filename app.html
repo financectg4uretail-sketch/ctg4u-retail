@@ -319,7 +319,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=3dfa2c89cd"></script>
-<script src="assets/calc.js?v=a1a4140184"></script>
+<script src="assets/calc.js?v=e8011c1d33"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '382d03f303af';
+  var MINE = '82099951cd10';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1667,13 +1667,57 @@ function handleFiles(files) {
 
 function readWorkbook(fname, buf) {
   var wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
+
+  /* One fuzzy match per brand TITLE, not per block. The retailers' workbook has
+     909 blocks written by 25 brands, so 884 of those matches were the same
+     question asked again - a third of a second of the import spent on it. The
+     answer depends only on the title and the master, and neither changes while
+     one workbook is being read. */
+  var brandCache = {};
+  var brandOf = function (title) {
+    if (!title) return null;
+    var k = CB.normKey(title);
+    if (!(k in brandCache)) brandCache[k] = CB.matchBrandOwner(title, ST.master.projects);
+    return brandCache[k];
+  };
   wb.SheetNames.forEach(function (sn) {
     var rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: '', raw: true });
     rows = rows.filter(function (r) { return r.some(function (c) { return c !== '' && c != null; }); });
     if (rows.length < 2) return;
 
     /* A pharmacy billing sheet is a cross-tab of packages and states its own
-     * totals, so it is read by its own parser rather than by column detection. */
+     * totals, so it is read by its own parser rather than by column detection.
+     *
+     * Two shapes exist. The older one is one tab per pharmacy per brand, blocks
+     * stacked, each with a Date column and its own commission and billing lines.
+     * The retailers' workbook is one tab per shop with the brands as sections
+     * inside it, no Date column, an explicit Quantity, and one Total Sales for
+     * the whole tab. Both come out of their reader as the same list of blocks,
+     * so everything below this point is the same for either. */
+    if (CB.isRetailerSheet(rows)) {
+      var rblocks = CB.parseRetailerSheets(rows);
+      if (!rblocks.length) return;
+      var rid = rblocks[0];
+      var rgot = CB.pickPharmacy(rid.pharmacyContact, rid.pharmacyTrading || sn, ST.master.pharmacies);
+
+      rblocks.forEach(function (parsed) {
+        var rbm = brandOf(parsed.brand);
+        var rdecided = CB.brandDecided(rbm);
+        ST.packages.push({
+          file: fname, name: sn, parsed: parsed,
+          brandRaw: parsed.brand || '', periodLabel: '',
+          brand: rdecided ? rbm.item : null,
+          brandSuggestion: (!rdecided && rbm) ? rbm.item : null,
+          brandScore: rbm ? rbm.score : 0,
+          brandRivals: (rbm && rbm.rivals > 1) ? rbm.tied : null,
+          pharmacy: rgot.pharmacy || null, matchedOn: rgot.how,
+          pharmacyRivals: rgot.rivals,
+          use: true
+        });
+      });
+      return;
+    }
+
     if (CB.isPackageSheet(rows)) {
       /* One tab is not one bill. These sheets stack a separate billing
          statement per brand down the same page - five of them on a busy
@@ -1696,7 +1740,7 @@ function readWorkbook(fname, buf) {
       var how = got.how;
 
       blocks.forEach(function (parsed) {
-        var bm = parsed.brand ? CB.matchBrandOwner(parsed.brand, ST.master.projects) : null;
+        var bm = brandOf(parsed.brand);
         var decided = CB.brandDecided(bm);
         ST.packages.push({
           file: fname, name: sn, parsed: parsed,
@@ -1790,7 +1834,8 @@ function renderPackages() {
   var BATCH_TITLE = {
     duplicate: 'The same sales appear twice.',
     period: 'Wrong period.',
-    rate: 'Settings and the sheets disagree on a rate.'
+    rate: 'Settings and the sheets disagree on a rate.',
+    total: 'A tab does not add up to its own total.'
   };
   batch.forEach(function (w) {
     h += '<div class="note bad"><b>' + (BATCH_TITLE[w.kind] || 'Check this file.') +

@@ -163,15 +163,71 @@
       return { item: byAlias[0], score: 1, rivals: byAlias.length, tied: byAlias, via: 'alias' };
     }
 
-    var bm = bestMatch(raw, projects, ['name', 'code'], threshold == null ? SUGGEST_AT : threshold);
-    if (bm) bm.via = 'name';
+    /* A brand owner is recorded as COMPANY - BRAND, because one company can own
+     * several brands and each is billed separately: BONLIFE - GOHERB,
+     * OASIS CTG - NINOKO, CTG4U WELLNESS - MASTERNERV. A sheet writes only the
+     * brand, and the retailers' workbook puts an O2O channel marker in front of
+     * it: "020 Goherb", "020 Ninoko".
+     *
+     * Matched against the whole recorded name, none of that scores. On the
+     * August file every one of the 25 brands came back undecided and 18 of them
+     * with no suggestion at all - an empty dropdown and 32 options to hunt
+     * through, 25 times, where a wrong pick pays a different company. So the
+     * brand half is matched as well as the whole name, and the channel marker
+     * is taken off first.
+     *
+     * This SHARPENS the dangerous case rather than blurring it: MIZINO PREMIUM,
+     * MIZINO PLACENTA and MIZINO ENZYME are three companies sharing a word, and
+     * comparing brand to brand separates them far better than comparing
+     * "020 Mizino Placenta" to "CTG4U WELLNESS - MIZINO PLACENTA". The tie guard
+     * is untouched: two owners scoring alike are still refused, not picked. */
+    /* The recorded name first, and on its own terms. A match here is the master
+       naming itself and may be applied without asking - which is the behaviour
+       that existed before the brand half was ever compared, and is deliberately
+       left exactly as it was. */
+    var whole = bestMatch(raw, projects, ['name', 'code'],
+                          threshold == null ? SUGGEST_AT : threshold);
+    if (whole && whole.score >= APPLY_AT) { whole.via = 'name'; return whole; }
+
+    var bare = String(raw || '').replace(/^\s*(?:020|o2o)\s+/i, '').trim() || raw;
+
+    var cands = projects.map(function (p) {
+      var c = {}, k;
+      for (k in p) if (Object.prototype.hasOwnProperty.call(p, k)) c[k] = p[k];
+      var n = String(p.name || '');
+      var cut = n.lastIndexOf(' - ');
+      c._brand = cut >= 0 ? n.slice(cut + 3).trim() : n;
+      c._orig = p;
+      return c;
+    });
+
+    var bm = bestMatch(bare, cands, ['name', '_brand', 'code'],
+                       threshold == null ? SUGGEST_AT : threshold);
+    if (!bm) return whole || null;
+
+    /* hand back the master's own record, not the working copy */
+    bm.item = bm.item._orig;
+    if (bm.tied) bm.tied = bm.tied.map(function (t) { return t._orig; });
+
+    /* `brand`, not `name`, and brandDecided refuses to apply it. A brand title
+       off a shop's sheet points at a company; it does not prove one. The
+       operator confirms it once and the alias decides it for ever after - which
+       is the whole point of the alias, and the reason three companies can share
+       the word MIZINO without anyone being paid by accident. */
+    bm.via = 'brand';
     return bm;
   }
 
   /* Applied by itself only on the operator's own confirmed answer, or on a
      score high enough AND unrivalled. Anything else is shown, never assumed. */
   function brandDecided(m) {
-    return !!(m && m.rivals === 1 && (m.via === 'alias' || m.score >= APPLY_AT));
+    /* `via === 'brand'` is excluded on purpose: that match compared the shop's
+       title against the BRAND half of a recorded name, which is a good enough
+       hint to put in front of a person and nowhere near good enough to pay a
+       company on. Only the master naming itself, or the operator's own
+       confirmed alias, decides. */
+    return !!(m && m.rivals === 1 && m.via !== 'brand' &&
+              (m.via === 'alias' || m.score >= APPLY_AT));
   }
 
   /* -------------------------------------------------------------- config */
@@ -2234,6 +2290,218 @@
   var MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
                 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
+  /* ============================ the retailer workbook ==================== *
+   *
+   * A second shape of the same monthly return, and the one the retailers send
+   * from August 2026. Where the older workbook was one tab per pharmacy PER
+   * BRAND - several blocks stacked, each with its own `Date | Package | Price`
+   * header and its own totals - this one is one tab per shop with the brands as
+   * SECTIONS inside it:
+   *
+   *     row 0   Farmasi Lee                          FARMASI LEE SDN BHD
+   *     row 1   Package | Quantity | Price | Unit Price (Price per bottle / box)
+   *     row 2   020 Goherb          <- section: names cols 4..N for what follows
+   *     row 3     Goherb-...-Promo E   1   578   578   [4]=3  [6]=5
+   *     row 4   MasterNerv          <- next section, cols 4..N mean something else
+   *     row 5     MasterNerv-...-A     2   440   220   [4]=2
+   *     ...
+   *     row n   Total Sales              24193
+   *
+   * Four differences that matter, none of them cosmetic:
+   *
+   *   1. There is no Date column, which is what the old reader keyed on - so
+   *      that reader does not recognise these sheets at all and every one of
+   *      them falls through to the generic list importer, which finds no money
+   *      column and bills zero.
+   *   2. The brand is a row, not a header field, and the same row REDEFINES what
+   *      columns 4 onward contain. Read with one fixed set of product columns,
+   *      every section after the first attributes its quantities to the previous
+   *      brand's products.
+   *   3. Quantity is explicit and Price is the LINE total, where the old sheets
+   *      wrote one row per sale at the package price.
+   *   4. The only stated figure is Total Sales for the whole tab. No commission,
+   *      no insurance, no billing line - so the per-block cross-check has
+   *      nothing to compare and the reconciliation has to be done per SHEET.
+   *
+   * Emits the same block shape as parsePackageSheets, one block per section, so
+   * everything downstream - brand owner, pharmacy, settlement, stock - is
+   * unchanged. */
+
+  var RETAIL_TOTAL_RE  = /^\s*total\s*sales/i;
+  var RETAIL_NONE_RE   = /no\s*sales\s*in\s*this\s*period/i;
+  var RETAIL_UNIT_RE   = /unit\s*price/i;
+
+  function isRetailerHeaderRow(row) {
+    var cells = (row || []).map(function (c) {
+      return String(c == null ? '' : c).trim().toLowerCase();
+    });
+    /* `date` absent is part of the signature, not an accident: it is what
+       separates this shape from the older one, and a sheet carrying both
+       should go to the older reader, which states more and checks more. */
+    return cells.indexOf('package') >= 0 && cells.indexOf('price') >= 0 &&
+           cells.indexOf('quantity') >= 0 && cells.indexOf('date') < 0;
+  }
+
+  function findRetailerHeader(rows) {
+    for (var i = 0; i < Math.min(rows.length, 8); i++) {
+      if (isRetailerHeaderRow(rows[i])) return i;
+    }
+    return -1;
+  }
+
+  function isRetailerSheet(rows) { return findRetailerHeader(rows) >= 0; }
+
+  /* Every brand section on one shop's tab, as blocks. */
+  function parseRetailerSheets(rows) {
+    var h = findRetailerHeader(rows);
+    if (h < 0) return [];
+
+    var cells = (rows[h] || []).map(function (c) {
+      return String(c == null ? '' : c).trim().toLowerCase();
+    });
+    var col = {
+      pkg: cells.indexOf('package'),
+      qty: cells.indexOf('quantity'),
+      price: cells.indexOf('price'),
+      unit: firstMatch(cells, RETAIL_UNIT_RE)
+    };
+    var known = {};
+    ['pkg', 'qty', 'price', 'unit'].forEach(function (k) {
+      if (col[k] >= 0) known[col[k]] = 1;
+    });
+
+    /* who the shop is - the trading name in the first cell, the registered name
+       beside it, exactly as the older sheets do it */
+    var trading = '', contact = '';
+    for (var i = 0; i < h; i++) {
+      var r = rows[i] || [];
+      var a = String(r[0] == null ? '' : r[0]).trim();
+      if (a && !trading) trading = a;
+      for (var j = 1; j < r.length && !contact; j++) {
+        var v = String(r[j] == null ? '' : r[j]).trim();
+        if (v && v !== trading) contact = v;
+      }
+    }
+
+    var blocks = [], cur = null, names = {}, statedTotal = null, oddUnit = [];
+
+    var open = function (label) {
+      cur = {
+        brand: label, periodLabel: '',
+        pharmacyTrading: trading, pharmacyContact: contact,
+        lines: [], giveaways: [], stated: {}
+      };
+      blocks.push(cur);
+    };
+
+    for (var k = h + 1; k < rows.length; k++) {
+      var row = rows[k] || [];
+      var label = String(row[col.pkg] == null ? '' : row[col.pkg]).trim();
+      if (!label) continue;
+
+      if (RETAIL_TOTAL_RE.test(label)) {
+        for (var t = 0; t < row.length; t++) {
+          if (typeof row[t] === 'number') { statedTotal = num(row[t]); break; }
+        }
+        continue;
+      }
+      if (RETAIL_NONE_RE.test(label)) continue;
+
+      var price = row[col.price];
+      /* A section row carries no money. Checked after the labels above, because
+         "Total Sales" does carry one and would otherwise open a brand called
+         Total Sales holding the rest of the sheet. */
+      if (typeof price !== 'number') {
+        open(label);
+        names = {};
+        for (var c2 = 0; c2 < row.length; c2++) {
+          if (known[c2]) continue;
+          var nm = String(row[c2] == null ? '' : row[c2]).trim();
+          /* A-11, A-12 … are spare slots the template leaves named but empty,
+             and no sale row in the August file carries a figure under one. */
+          if (nm && !/^A-\d+$/i.test(nm) && !NOT_A_PRODUCT.test(nm.toLowerCase())) {
+            names[c2] = nm;
+          }
+        }
+        continue;
+      }
+
+      if (!cur) open('');                       // a sale before any section row
+
+      var qty = Math.round(num(row[col.qty])) || 1;
+      var lineTotal = num(price);
+      var unit = col.unit >= 0 ? num(row[col.unit]) : 0;
+      /* The stated unit price is used as written wherever it multiplies back to
+         the stated line total, which it does on 1,705 of the 1,706 rows in the
+         August file.
+         Where it does not, the line total is divided out instead - but money on
+         an invoice is two decimal places, so 1952 over 6 is stored as 325.33 and
+         the line lands 2 sen under what the shop wrote. That difference is real
+         and is NOT silently absorbed: the row is recorded in oddUnitPrices and
+         the tab's own Total Sales is reconciled below, so it appears on the
+         import screen instead of being discovered later. Absorbing it by storing
+         a six-decimal unit price would put an unpayable figure on an invoice to
+         save two sen. */
+      if (!unit || r2(unit * qty) !== r2(lineTotal)) {
+        if (qty > 0 && lineTotal) {
+          if (unit) oddUnit.push({ pkg: label, stated: unit, used: lineTotal / qty, qty: qty });
+          unit = lineTotal / qty;
+        }
+      }
+
+      var parts = [];
+      for (var c3 = 0; c3 < row.length; c3++) {
+        if (known[c3] || !names[c3]) continue;
+        var q = num(row[c3]);
+        if (q) parts.push({ sku: names[c3], qty: q });
+      }
+
+      /* Nothing was charged, so nothing is billed - but the goods did leave the
+         shelf. "sample" and "exchange for customer" both land here. */
+      if (!lineTotal) {
+        if (parts.length) cur.giveaways.push({ pkg: label, qty: qty, parts: parts });
+        continue;
+      }
+
+      /* One entry per package sold, which is the shape packageLines() groups and
+         counts. The components are the line's TOTAL - proven against the file:
+         893 of 947 component figures on multi-quantity rows divide evenly by the
+         quantity - so they ride on the first entry and the rest carry none,
+         rather than being divided down and rounded. */
+      for (var n2 = 0; n2 < qty; n2++) {
+        cur.lines.push({ pkg: label, price: r2(unit), parts: n2 === 0 ? parts : [] });
+      }
+    }
+
+    /* The one figure the sheet states covers every brand on it, so it is checked
+       once for the tab and carried on each block for whoever wants to say so. */
+    var computed = 0;
+    blocks.forEach(function (b) {
+      b.lines.forEach(function (l) { computed += l.price; });
+    });
+    computed = r2(computed);
+    /* How far the tab is allowed to be out, derived rather than picked.
+     *
+     * A unit price that will not divide evenly is stored to the sen, so each
+     * package on such a row can be up to half a sen from what the shop wrote.
+     * The allowance is exactly that and no more - so a tab that is out by
+     * rounding passes, and a tab that is out because a row was misread does not,
+     * because it has no odd rows to explain itself with. */
+    var tolerance = 0;
+    oddUnit.forEach(function (o) { tolerance += o.qty * 0.005; });
+    tolerance = Math.ceil(tolerance * 100) / 100;
+
+    blocks.forEach(function (b) {
+      b.sheet = {
+        trading: trading, statedTotal: statedTotal, computedTotal: computed,
+        diff: statedTotal == null ? null : r2(computed - statedTotal),
+        tolerance: tolerance,
+        oddUnitPrices: oddUnit
+      };
+    });
+    return blocks;
+  }
+
   /* Whose shop is this? A billing sheet answers twice.
    *
    * The block header carries a registered name - "UNICARE RX SDN BHD" - and the
@@ -2387,7 +2655,40 @@
       });
     }
 
-    /* 2. every sheet says one rate and Settings says another.
+    /* 2. a tab that does not add up to the total it states.
+     *
+     * The retailers' workbook states one figure per tab - Total Sales for every
+     * brand on it - and it is the only figure it states. parsePackageSheets'
+     * cross-check has nothing to work with here, so the comparison is done when
+     * the tab is read and reported here, where the operator is already looking.
+     *
+     * A tab that disagrees means one of two things and both need a person: a row
+     * this reader did not understand, or a total the shop worked out by hand. */
+    var badTabs = {}, tabOrder = [];
+    live.forEach(function (p) {
+      var sh = p.parsed && p.parsed.sheet;
+      if (!sh || !sh.diff || badTabs[p.name]) return;
+      badTabs[p.name] = sh;
+      tabOrder.push(p.name);
+    });
+    if (tabOrder.length) {
+      var worst = tabOrder.slice().sort(function (a, b) {
+        return Math.abs(badTabs[b].diff) - Math.abs(badTabs[a].diff);
+      })[0];
+      var w = badTabs[worst];
+      out.push({
+        kind: 'total',
+        text: tabOrder.length + ' tab(s) do not add up to the Total Sales they state. ' +
+          'Largest: ' + worst + ' states ' + money(w.statedTotal) + ' and the rows read ' +
+          money(w.computedTotal) + ' \u2014 a difference of ' + money(w.diff) + '. ' +
+          ((w.oddUnitPrices || []).length
+            ? 'That tab has a unit price that does not divide evenly (' +
+              w.oddUnitPrices[0].pkg + '), which accounts for a sen or two.'
+            : 'Check for a row this reader did not understand.')
+      });
+    }
+
+    /* 3. every sheet says one rate and Settings says another.
      *
      * packageCrossCheck already compares each block against the rates it states
      * and refuses the ones that disagree. That is right per block and useless in
@@ -2439,7 +2740,7 @@
       });
     });
 
-    /* 3. the period the sheets state against the period being billed */
+    /* 4. the period the sheets state against the period being billed */
     var months = {}, unread = 0;
     live.forEach(function (p) {
       var m = periodOfLabel(p.periodLabel);
@@ -2631,7 +2932,26 @@
      * and Billing, so one arriving without them means it was trimmed, or it is
      * laid out differently and was read wrongly. Either way the sheet, not the
      * month, is what needs fixing. */
-    if (parsed.stated.totalSales == null && parsed.stated.billing == null) {
+    /* The retailers' workbook states ONE Total Sales for a whole tab, covering
+       every brand section on it, so a single block genuinely has no total of its
+       own and never will. That is not the same as a trimmed sheet: the tab was
+       reconciled when it was read - every row on it against the one figure it
+       states - and the result travels on `parsed.sheet`. A tab that balances has
+       had exactly the independent check this guard exists to demand, so the
+       block is let through; a tab that does not is refused here AND named on the
+       import screen by blockWarnings. */
+    var tab = parsed.sheet;
+    if (tab && tab.statedTotal != null) {
+      if (tab.diff && Math.abs(tab.diff) > (tab.tolerance || 0)) {
+        out.problems.push('this tab states Total Sales of ' + money(tab.statedTotal) +
+          ' and its rows read ' + money(tab.computedTotal) + ' — a difference of ' +
+          money(tab.diff) + ', so something on it was not read the way it was written');
+      } else if (tab.diff) {
+        out.notes.push('this tab reads ' + money(tab.diff) + ' against its stated ' +
+          money(tab.statedTotal) + ', from a unit price that does not divide evenly (' +
+          (tab.oddUnitPrices[0] || {}).pkg + ')');
+      }
+    } else if (parsed.stated.totalSales == null && parsed.stated.billing == null) {
       out.problems.push('this sheet carries no Total Sales or Billing of its own, ' +
         'so there is nothing to check how it was read - ask the pharmacy for the ' +
         'sheet with its totals block');
@@ -2711,6 +3031,40 @@
     var pharmacies = (master && master.pharmacies) || [];
     var products = (master && master.products) || [];
 
+    /* Asking "does this value name a pharmacy" is a fuzzy match against the
+     * whole master - 62 pharmacies over three fields, 252 products over two -
+     * and it was being asked once per CELL. A column of 300 sampled values cost
+     * roughly 200,000 similarity computations, and a workbook with a few wide
+     * diagnostic tabs in it spent ten seconds on each of them: the retailers'
+     * August file froze the page for about forty seconds with nothing to show
+     * for it, because those tabs are not billing sheets at all.
+     *
+     * The answer depends only on the value, and a column repeats itself. So it
+     * is asked once per distinct value and the rate is worked out by how often
+     * each one occurs - identical arithmetic, a fraction of the work. Above the
+     * cap the distinct values are sampled rather than exhausted; a column with
+     * more than this many different values is one whose rate is near zero or
+     * near one either way, and the estimate is not what decides it. */
+    var MATCH_CAP = 120;
+    var rateOf = function (vals, test) {
+      var seen = {}, order = [], counts = {};
+      for (var i = 0; i < vals.length; i++) {
+        var k = normKey(vals[i]);
+        if (!(k in counts)) { counts[k] = 0; order.push(k); seen[k] = vals[i]; }
+        counts[k]++;
+      }
+      var hits = 0, asked = 0, weighed = 0;
+      for (var j = 0; j < order.length && asked < MATCH_CAP; j++) {
+        var key = order[j];
+        asked++;
+        weighed += counts[key];
+        if (test(seen[key])) hits += counts[key];
+      }
+      /* weighed, not vals.length: when the cap bites, the rate is over what was
+         actually looked at, which is what a sample means */
+      return weighed ? hits / weighed : 0;
+    };
+
     var stats = [];
     for (var c = 0; c < n; c++) {
       var vals = sample.map(function (r) { return r[c]; }).filter(function (v) { return v !== '' && v != null; });
@@ -2723,12 +3077,12 @@
         decRate: vals.filter(function (v) { return looksNum(v) && Math.abs(num(v) % 1) > 1e-9; }).length / nonEmpty,
         distinct: (function () { var s = {}; vals.forEach(function (v) { s[normKey(v)] = 1; }); return Object.keys(s).length; })(),
         avg: vals.filter(looksNum).length ? sum(vals.filter(looksNum).map(num)) / vals.filter(looksNum).length : 0,
-        pharmRate: pharmacies.length ? vals.filter(function (v) {
-          return !looksNum(v) && bestMatch(v, pharmacies, ['trading', 'contact', 'code'], 0.7);
-        }).length / nonEmpty : 0,
-        prodRate: products.length ? vals.filter(function (v) {
-          return !looksNum(v) && bestMatch(v, products, ['sku', 'name'], 0.75);
-        }).length / nonEmpty : 0
+        pharmRate: pharmacies.length ? rateOf(vals, function (v) {
+          return !looksNum(v) && !!bestMatch(v, pharmacies, ['trading', 'contact', 'code'], 0.7);
+        }) : 0,
+        prodRate: products.length ? rateOf(vals, function (v) {
+          return !looksNum(v) && !!bestMatch(v, products, ['sku', 'name'], 0.75);
+        }) : 0
       };
       stats.push(st);
     }
@@ -2845,6 +3199,7 @@
     productRollup: productRollup, shares: shares,
     deliveryOrderHTML: deliveryOrderHTML, deliveryOrderDoc: deliveryOrderDoc, DO_CSS: DO_CSS,
     matchBrandOwner: matchBrandOwner, brandDecided: brandDecided,
+    isRetailerSheet: isRetailerSheet, parseRetailerSheets: parseRetailerSheets,
     pickPharmacy: pickPharmacy, PICK_MARGIN: PICK_MARGIN,
     periodOfLabel: periodOfLabel, blockWarnings: blockWarnings,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
