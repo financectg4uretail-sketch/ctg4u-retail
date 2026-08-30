@@ -262,10 +262,24 @@
      * switch; the rate does not have to be falsified to stop the deduction. */
     insuranceFeePct: 0.80,       // what the pharmacy sheets state
     deductInsurance: false,      // whether the brand owner is charged it
-    sstPct: 8.00,                // service tax on the fees
+    sstPct: 8.00,                // service tax on the fees, or the service charge
     sstOnMgmtFee: true,
     sstOnServiceFee: true,
     sstOnInsurance: false,       // insurance is not a taxable service by default
+    /* Is the 8% a TAX, or a charge?
+     *
+     * Only a registered company may charge service tax. Sent as a Xero TaxType
+     * it lands in a tax liability account and on a tax return, which is a
+     * company collecting tax it has no authority to collect. Turned off, the
+     * same 8% is billed as an ordinary line of income - the brand owner pays
+     * the identical amount and the settlement does not move; what changes is
+     * which account it lands in and what it is called.
+     *
+     * Default true, because that is what every run before this one did. */
+    sstIsTax: true,
+    /* Where the charge lands when it is NOT a tax. Blank falls back to the
+       service fee account, the same way insurance already does. */
+    acctServiceCharge: '',
 
     /* Xero chart of accounts. Deliberately blank.
      *
@@ -360,8 +374,11 @@
     else if (s > 0 && s < 0.5) out.push('The service fee is ' + s + '% of gross sales. Was ' +
       r2(s * 10) + '% meant?');
 
+    /* Only a TAX has statutory rates to be measured against. A service charge is
+       a commercial term and 7.5% is as legitimate as 8%, so warning about it
+       would be crying wolf on a number the operator chose deliberately. */
     var t = n(c.sstPct);
-    if ([0, 6, 8, 10].indexOf(t) < 0) {
+    if (c.sstIsTax && [0, 6, 8, 10].indexOf(t) < 0) {
       out.push('SST is set to ' + t + '%. Malaysian service tax has been 6%, 8% or 10%; ' +
         'anything else is worth a second look before it goes on an invoice.');
     }
@@ -985,12 +1002,24 @@
         : (code ? '' : 'nothing is set'));
     });
 
-    [['Tax type for exempt lines', 'taxTypeExempt'],
-     ['Tax type for SST lines', 'taxTypeSST']].forEach(function (f) {
+    var taxChecks = [['Tax type for exempt lines', 'taxTypeExempt']];
+    /* Only worth asking Xero about a tax rate the files will actually use. As a
+       service charge nothing carries it, and reporting it missing would send the
+       operator to create a tax rate the company must not use. */
+    if (c.sstIsTax) taxChecks.push(['Tax type for SST lines', 'taxTypeSST']);
+    taxChecks.forEach(function (f) {
       var want = String(c[f[1]] || '').trim();
       var t = tax[want.toLowerCase()];
       add(f[0], want, !!t, t ? t.name + ' → ' + t.taxType + ' @ ' + t.rate + '%' : '');
     });
+    /* and the account the charge lands in, which is only used in that mode */
+    if (!c.sstIsTax) {
+      var sc = String(c.acctServiceCharge || c.acctServiceIncome || '').trim();
+      var sa = accounts[sc];
+      add('Service charge income', sc, !!sa, sa
+        ? sa.name + ' — ' + sa.type + (sa.status && sa.status !== 'ACTIVE' ? ' (' + sa.status + ')' : '')
+        : (sc ? '' : 'nothing is set'));
+    }
 
     trackingUsed(settlement, billing, c).forEach(function (t) {
       var opts = cats[String(t.name).trim().toLowerCase()];
@@ -1062,6 +1091,15 @@
    *
    * So it is written once. A second copy is how two documents from the same
    * company start describing it differently. */
+  /* What the 8% is called, everywhere it is named.
+   *
+   * Not a free-text setting: the name is not an opinion, it follows from
+   * whether the money is a tax. Charged as a tax it is SST and there is no
+   * other honest word for it; charged by a company that is not registered it
+   * is a service charge and must not be called SST on a document that leaves
+   * the building. */
+  function feeChargeLabel(c) { return cfg(c).sstIsTax ? 'SST' : 'Service Charge'; }
+
   function issuerHTML(c) {
     c = cfg(c);
     var name = c.coName || 'CTG4U RETAIL SDN BHD';
@@ -1142,6 +1180,17 @@
     if (!String(c.coReg || '').trim()) out.push('The business registration number (SSM) is blank.');
     if (!String(c.coTin || '').trim()) out.push('The tax identification number (TIN) is blank. ' +
       'Every invoice, settlement statement and delivery order is required to carry it.');
+    /* A particular like the others, and the one with a consequence beyond a
+       blank line: only a registered company may charge service tax, and the
+       registration number has to be on the invoice that charges it. Charging it
+       without one is a company collecting tax it has no authority to collect. */
+    if (c.sstIsTax && num(c.sstPct) > 0 && !String(c.coSst || '').trim()) {
+      out.push('The fee invoice charges ' + r2(num(c.sstPct)) + '% as SST and no SST registration ' +
+        'number is set. Only a registered company may charge service tax, and the number has to ' +
+        'be on the invoice. If the company is not registered, turn off "The 8% is service tax" in ' +
+        'Settings — the same 8% is then billed as a Service Charge, which is income rather ' +
+        'than tax, and the brand owner pays exactly the same.');
+    }
 
     /* The other side of every document. A counterparty missing a particular is
        not an error anybody sees - the field simply does not print - so it is
@@ -1461,12 +1510,16 @@
         'Discount': '',
         'Currency': 'MYR'
       }, trackingCells(trackingPairs(c, null, S.project)));
+      /* A tax type only where the 8% really is a tax. Unregistered, every line
+         is exempt and the 8% follows as a line of its own below. */
+      var taxed = function (on) { return (c.sstIsTax && on) ? c.taxTypeSST : c.taxTypeExempt; };
+
       if (S.mgmtFee) rows.push(assign({}, base, {
         '*Description': 'Pharmacy Management Fee - ' + S.pharmacyCount + ' pharmacy(s) - ' + periodLabel(c.period),
         '*Quantity': S.pharmacyCount,
         '*UnitAmount': r2(c.mgmtFeePerPharmacy).toFixed(2),
         '*AccountCode': c.acctMgmtIncome,
-        '*TaxType': c.sstOnMgmtFee ? c.taxTypeSST : c.taxTypeExempt
+        '*TaxType': taxed(c.sstOnMgmtFee)
       }));
       if (S.serviceFee) rows.push(assign({}, base, {
         'EmailAddress': '',
@@ -1475,7 +1528,7 @@
         '*Quantity': 1,
         '*UnitAmount': r2(S.serviceFee).toFixed(2),
         '*AccountCode': c.acctServiceIncome,
-        '*TaxType': c.sstOnServiceFee ? c.taxTypeSST : c.taxTypeExempt
+        '*TaxType': taxed(c.sstOnServiceFee)
       }));
       if (S.insuranceFee) rows.push(assign({}, base, {
         'EmailAddress': '',
@@ -1484,7 +1537,25 @@
         '*Quantity': 1,
         '*UnitAmount': r2(S.insuranceFee).toFixed(2),
         '*AccountCode': c.acctInsuranceIncome || c.acctServiceIncome,
-        '*TaxType': c.sstOnInsurance ? c.taxTypeSST : c.taxTypeExempt
+        '*TaxType': taxed(c.sstOnInsurance)
+      }));
+
+      /* The 8%, as income rather than as tax.
+       *
+       * Its own line, so the brand owner sees what they are paying and Xero
+       * posts it to a revenue account instead of a tax liability. The amount is
+       * the settlement's own figure - never recomputed here - so the invoice,
+       * the statement and the payout cannot drift from one another. Written
+       * only when the fees actually attracted it: a run whose base is nil has
+       * no charge to bill. */
+      if (!c.sstIsTax && S.sst) rows.push(assign({}, base, {
+        'EmailAddress': '',
+        '*Description': 'Service Charge ' + r2(c.sstPct) + '% on fees of ' + periodLabel(c.period) +
+          ' (MYR ' + money(S.sstBase) + ')',
+        '*Quantity': 1,
+        '*UnitAmount': r2(S.sst).toFixed(2),
+        '*AccountCode': c.acctServiceCharge || c.acctServiceIncome,
+        '*TaxType': c.taxTypeExempt
       }));
     });
     return { columns: SALES_COLS, rows: rows };
@@ -1966,11 +2037,15 @@
       sr('Less: Service Fee ' + r2(c.serviceFeePct) + '% of Sales Amount', '(' + money(P.serviceFee) + ')') +
       (P.insuranceFee ? sr('Less: Insurance ' + r2(c.insuranceFeePct) + '% of Sales Amount',
         '(' + money(P.insuranceFee) + ')') : '') +
-      sr('Less: SST ' + r2(c.sstPct) + '% on fees', '(' + money(P.sst) + ')') +
+      sr('Less: ' + feeChargeLabel(c) + ' ' + r2(c.sstPct) + '% on fees', '(' + money(P.sst) + ')') +
       sr('TOTAL PAYOUT AMOUNT (MYR)', money(P.totalPayout), 'tot') +
       '</table>' +
 
-      '<div class="ft">Fees are billed separately on tax invoice <b>' + esc(P.serviceInvoiceNumber || '—') +
+      /* "Tax invoice" is a term with a legal meaning and only a registered
+         company may issue one. Called that by a company with no registration it
+         is a wrong statement on a document that goes to another business. */
+      '<div class="ft">Fees are billed separately on ' + (c.sstIsTax ? 'tax invoice' : 'invoice') +
+      ' <b>' + esc(P.serviceInvoiceNumber || '—') +
       '</b> and offset against settlement <b>' + esc(P.payoutBillNumber || '—') + '</b>.<br>' +
       'Service fee is calculated on the gross Sales Amount before discount. Amounts in Malaysian Ringgit.' +
       '<div class="sig"><div>Prepared by<br><span></span></div>' +
@@ -3310,6 +3385,7 @@
     normKey: normKey, similarity: similarity, bestMatch: bestMatch,
     monthEnd: monthEnd,
     monthStart: monthStart, addDays: addDays, dmy: dmy, periodLabel: periodLabel, periodYYMM: periodYYMM,
+    feeChargeLabel: feeChargeLabel,
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,

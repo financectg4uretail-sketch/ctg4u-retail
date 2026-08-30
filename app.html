@@ -319,7 +319,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=3dfa2c89cd"></script>
-<script src="assets/calc.js?v=a7c442c13a"></script>
+<script src="assets/calc.js?v=8fed2f85c1"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'b14401017625';
+  var MINE = 'e4bf4317ed2a';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1517,7 +1517,7 @@ function renderDash() {
       figs(M(F.income), 'fees earned', M(F.payout), 'payable to brand owners') +
       '<div class="mut" style="margin-top:14px">Management fee ' + M(F.mgmt) +
       ' &middot; service fee ' + M(F.service) + ' &middot; insurance ' + M(F.insurance) +
-      ' &middot; SST ' + M(F.sst) + '.</div>',
+      ' &middot; ' + CB.feeChargeLabel(ST.cfg) + ' ' + M(F.sst) + '.</div>',
       '<button class="btn ghost sm" onclick="go(&#39;settle&#39;)">Settlement</button>');
 
     h += xcard('Pharmacies by consignment sales',
@@ -3924,7 +3924,7 @@ function renderSettle() {
     kpi('Sales amount', M(g.sales)) +
     kpi('Net sales after ' + c.discountPct + '%', M(g.net)) +
     kpi('CTG4U fee income', M(CB.r2(g.mgmt + g.svc)), 'accent') +
-    kpi('SST 8% collected', M(g.sst)) +
+    kpi(CB.feeChargeLabel(c) + ' ' + CB.r2(c.sstPct) + '% collected', M(g.sst)) +
     kpi('Payable to brand owners', M(g.pay)) +
     kpi('Brand owners / pharmacies', S.projects.length + ' / ' + ST.billing.length) +
     '</div>';
@@ -3949,7 +3949,7 @@ function renderSettle() {
       rr('<b>Net Sales</b>', '<b>' + M(P.netSales) + '</b>', '', 'sub') +
       rr('Less: Pharmacy Management Fee (' + P.pharmacyCount + ' × ' + M(c.mgmtFeePerPharmacy) + ')', '(' + M(P.mgmtFee) + ')', 'neg') +
       rr('Less: Service Fee ' + c.serviceFeePct + '% of Sales Amount', '(' + M(P.serviceFee) + ')', 'neg') +
-      rr('Less: SST ' + c.sstPct + '% on fees', '(' + M(P.sst) + ')', 'neg') +
+      rr('Less: ' + CB.feeChargeLabel(c) + ' ' + c.sstPct + '% on fees', '(' + M(P.sst) + ')', 'neg') +
       rr('TOTAL PAYOUT', M(P.totalPayout), '', 'tot') +
       '</table></div>' +
 
@@ -4058,7 +4058,10 @@ function renderOut() {
     outCard('B · Brand owner fee invoices', 'ACCREC · ' + S.projects.length + ' invoices',
       M(CB.r2(CB.sumMoney(S.projects, function (p) { return p.mgmtFee + p.serviceFee; }) + CB.sumMoney(S.projects, function (p) { return p.sst; }))),
       'CTG4U revenue: management fee → ' + c.acctMgmtIncome + ', service fee → ' + c.acctServiceIncome +
-      ', both at ' + esc(c.taxTypeSST) + '.', 'dlSvc()') +
+      (c.sstIsTax
+        ? ', both at ' + esc(c.taxTypeSST) + '.'
+        : ', plus the ' + CB.r2(c.sstPct) + '% service charge as a line of its own. Nothing carries ' +
+          'a tax type: the company is not charging tax.'), 'dlSvc()') +
     outCard('C · Brand owner payout bills', 'ACCPAY · ' + S.projects.length + ' bills · ' + billT.rows.length + ' lines',
       M(CB.sumMoney(S.projects, function (p) { return p.netSales; })),
       'Raised at <b>net sales</b>, not at the payout figure — the fees in (B) offset it. Cash to remit = C − B.', 'dlBill()') +
@@ -4218,7 +4221,8 @@ function dlWorkbook() {
   
     add('Summary', [['CTG4U RETAIL SDN BHD — Consignment settlement'], ['Period', CB.periodLabel(c.period)], [],
       ['Brand owner', 'Pharmacies', 'Sales Amount', 'Discount ' + c.discountPct + '%', 'Net Sales',
-        'Mgmt Fee', 'Service Fee ' + c.serviceFeePct + '%', 'SST ' + c.sstPct + '%', 'Total Payout',
+        'Mgmt Fee', 'Service Fee ' + c.serviceFeePct + '%',
+        CB.feeChargeLabel(c) + ' ' + c.sstPct + '%', 'Total Payout',
         'Fee invoice', 'Payout bill']]
       .concat(S.projects.map(function (P) {
         return [P.project.name, P.pharmacyCount, P.salesAmount, P.discount, P.netSales,
@@ -4904,7 +4908,8 @@ var CFG_FIELDS = {
     ['coName', 'Company name', 'As it should appear on a statement', 'text'],
     ['coReg', 'Business registration no. (SSM)', 'Printed on every document', 'text'],
     ['coTin', 'Tax identification no. (TIN)', 'Printed on every document — required on all of them', 'text'],
-    ['coSst', 'SST registration no.', 'Left off when blank', 'text'],
+    ['coSst', 'SST registration no.', 'Left off the statement when blank. Only a registered ' +
+      'company may charge service tax', 'text'],
     ['coAddress', 'Registered address', 'One line per line', 'area'],
     ['coEmail', 'Contact email', 'Where a brand owner should reply', 'text'],
     ['coPhone', 'Contact phone', '', 'text']
@@ -4913,9 +4918,15 @@ var CFG_FIELDS = {
     ['discountPct', 'Pharmacy discount %', 'Taken off every line and rounded there', 'number'],
     ['mgmtFeePerPharmacy', 'Management fee per pharmacy (MYR)', 'Charged once per pharmacy by each brand owner', 'number'],
     ['serviceFeePct', 'Service fee % of gross sales', 'Calculated before the discount, not after', 'number'],
-    ['sstPct', 'SST %', 'Applied to the two fees above', 'number'],
-    ['sstOnMgmtFee', 'SST on management fee', 'Include it in the SST base', 'bool'],
-    ['sstOnServiceFee', 'SST on service fee', 'Include it in the SST base', 'bool'],
+    /* The switch first, because it decides what the three below are called and
+       where the money lands. Off is not a discount: the brand owner pays the
+       same 8%, billed as income instead of as tax. */
+    ['sstIsTax', 'The 8% is service tax (SST)', 'ON: charged as tax, needs an SST registration and a ' +
+      'Xero tax rate. OFF: the same 8% is billed as a Service Charge on its own line, which is ' +
+      'income, not tax. The brand owner pays the same either way', 'bool'],
+    ['sstPct', 'SST / Service Charge %', 'Applied to the two fees above', 'number'],
+    ['sstOnMgmtFee', 'Charge it on the management fee', 'Include it in the base', 'bool'],
+    ['sstOnServiceFee', 'Charge it on the service fee', 'Include it in the base', 'bool'],
     /* Two settings, one rate, and getting the division wrong stopped a whole
        month. The help here used to read "Zero, so it is not deducted", which is
        an instruction to zero it - and `deductInsurance`, the control that
@@ -4928,7 +4939,7 @@ var CFG_FIELDS = {
        does what. */
     ['insuranceFeePct', 'Insurance % the pharmacy sheets state', 'What the Insurans line on their sheets says — 0.8%. This is how a sheet is recognised as the right arrangement; it does not decide whether anyone pays it. Do not zero it to stop the deduction, or every sheet will be refused', 'number'],
     ['deductInsurance', 'Deduct insurance from the payout', 'This is the switch. Off means the brand owner is not charged it, whatever the rate above says', 'bool'],
-    ['sstOnInsurance', 'SST on insurance', 'Off by default: insurance is not a taxable service', 'bool']
+    ['sstOnInsurance', 'Charge it on insurance', 'Off by default: insurance is not a taxable service', 'bool']
   ],
   xero: [
     ['acctPassThrough', 'Pass-through account (pharmacy invoices + payout bills)', 'A liability owed to brand owners, not revenue', 'text'],
@@ -4936,7 +4947,9 @@ var CFG_FIELDS = {
     ['acctServiceIncome', 'Service fee income account', 'Revenue', 'text'],
     ['acctInsuranceIncome', 'Insurance income account', 'Revenue. Same as the service fee account unless you separate it', 'text'],
     ['taxTypeExempt', 'TaxType for non-taxable lines', 'Must match a Xero tax rate name exactly', 'text'],
-    ['taxTypeSST', 'TaxType for SST lines', 'SST TaxType', 'text'],
+    ['taxTypeSST', 'TaxType for SST lines', 'Used only while the 8% is charged as tax', 'text'],
+    ['acctServiceCharge', 'Service charge income account', 'Where the 8% lands when it is NOT a tax. ' +
+      'Blank uses the service fee account', 'text'],
     ['dueDays', 'Payment terms (days)', 'Added to the document date', 'number']
   ],
   num: [
@@ -5593,7 +5606,7 @@ function showRun(id) {
       ' <span class="st ' + esc(d.run.status) + '">' + esc(d.run.status) + '</span></h2>' +
       '<div class="hint">Rates used: discount ' + CB.r2(d.run.cfg.discountPct) + '%, management fee MYR ' +
       CB.money(d.run.cfg.mgmtFeePerPharmacy) + ' per pharmacy, service fee ' + CB.r2(d.run.cfg.serviceFeePct) +
-      '% of gross, SST ' + CB.r2(d.run.cfg.sstPct) + '%.</div>' +
+      '% of gross, ' + CB.feeChargeLabel(d.run.cfg) + ' ' + CB.r2(d.run.cfg.sstPct) + '%.</div>' +
 
       /* Posting is idempotent, so the button is safe to press at any time - it
          answers "already done" rather than moving anything twice. */
@@ -5623,7 +5636,8 @@ function showRun(id) {
         : '') +
 
       '<table style="margin-bottom:16px"><tr><th>Brand owner</th><th class="num">Sales</th>' +
-      '<th class="num">Net sales</th><th class="num">Fees</th><th class="num">SST</th>' +
+      '<th class="num">Net sales</th><th class="num">Fees</th>' +
+      '<th class="num">' + esc(CB.feeChargeLabel(d.run.cfg)) + '</th>' +
       '<th class="num">Payout</th><th>Fee invoice</th><th>Payout bill</th></tr>' +
       d.settlements.map(function (x) {
         return '<tr><td>' + esc(x.brand_owners ? x.brand_owners.name : '-') + '</td>' +
