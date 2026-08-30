@@ -319,7 +319,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=3dfa2c89cd"></script>
-<script src="assets/calc.js?v=a99c5240f2"></script>
+<script src="assets/calc.js?v=a7c442c13a"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -340,7 +340,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '54421d8a1fb5';
+  var MINE = 'b14401017625';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1848,6 +1848,20 @@ function renderPackages() {
   batch.forEach(function (w) {
     h += '<div class="note bad"><b>' + (BATCH_TITLE[w.kind] || 'Check this file.') +
       '</b> ' + esc(w.text) +
+      /* Named, not counted. A warning that says eleven and shows one leaves ten
+         decisions the operator does not know they have to make - and each of
+         these decides which company gets billed for the goods. */
+      (w.rows && w.rows.length
+        ? '<div class="scroll" style="max-height:240px;margin-top:9px"><table>' +
+          '<tr><th>Master record</th><th>Claimed by these sheets</th><th class="num">Gross</th></tr>' +
+          w.rows.map(function (g) {
+            return '<tr><td>' + esc(g.pharmacy) +
+              (g.registered ? '<div class="mut">' + esc(g.registered) + '</div>' : '') + '</td><td>' +
+              g.tabs.map(function (t) {
+                return esc(t.name) + ' <span class="mut">' + M(t.gross) + '</span>';
+              }).join('<br>') + '</td><td class="num">' + M(g.gross) + '</td></tr>';
+          }).join('') + '</table></div>'
+        : '') +
       (w.suggest
         ? ' <button class="btn sm" style="margin-left:8px" onclick="usePeriod(&#39;' +
           esc(w.suggest) + '&#39;)">Bill it as ' + esc(CB.periodLabel(w.suggest)) + '</button>'
@@ -2013,8 +2027,14 @@ function renderPackages() {
             ? ' &middot; matches ' + r.P.brandRivals.length + ' equally'
             : r.P.brandSuggestion ? ' &middot; suggested, not applied' : '') + '</div>';
 
+      /* Disabled ONLY where the tick decides nothing. A block with nothing sold
+         cannot be billed whether it is ticked or not, so the box is dead there
+         and says so. Everywhere else both answers mean something - and on a
+         block with no pharmacy or no brand owner, unticking is the operator's
+         only way past this screen, which is what the gate below asks for in so
+         many words. Disabling those was asking for a remedy and withholding it. */
       return '<tr><td><input type="checkbox" ' + (r.P.use ? 'checked' : '') +
-        (r.zero || !r.P.pharmacy || !r.P.brand || !r.x.ok ? ' disabled' : '') +
+        (r.zero ? ' disabled' : '') +
         ' onchange="ST.packages[' + i + '].use=this.checked;renderPackages()"></td>' +
         '<td>' + esc(r.P.name) +
           (r.P.periodLabel ? '<div class="mut">' + esc(r.P.periodLabel) + '</div>' : '') + '</td>' +
@@ -2042,6 +2062,27 @@ function renderPackages() {
      A shop dropped from a month is the silent-omission failure this project has
      had before; it is not silent if the money is on the button's own line. */
   var left = rowsOut.filter(function (r) { return !r.zero && !on(r); });
+
+  /* One click for what would otherwise be seventy-nine.
+   *
+   * A month opens with every shop that is new to Xero unresolved - sixty-four
+   * tabs in August. Each is a legitimate answer of "not this month", and making
+   * the operator say it sixty-four times is how a month gets abandoned halfway
+   * and finished in Excel instead. The blocks are named above with their gross
+   * either way, and the line under the button says what was dropped, so this
+   * shortens the work without hiding any of it. */
+  var stuck = rowsOut.filter(function (r) {
+    return !r.zero && on(r) && (!r.P.pharmacy || !r.P.brand || !r.x.ok);
+  });
+  if (stuck.length) {
+    h += '<div class="note warn"><b>' + stuck.length + ' ticked block(s) cannot be billed as they stand</b> &mdash; ' +
+      M(CB.sumMoney(stuck, function (r) { return r.x.gross; })) + ' of sales. ' +
+      'Answer them above, or leave them for a later run.' +
+      '<div class="row" style="margin-top:9px">' +
+      '<button class="btn ghost" onclick="untickUnbillable()">Leave out all ' + stuck.length +
+      ' &mdash; bill the rest</button></div></div>';
+  }
+
   if (left.length) {
     h += '<div class="note"><b>' + left.length + ' block(s) are unticked</b> and will not be billed &mdash; ' +
       M(CB.sumMoney(left, function (r) { return r.x.gross; })) + ' of sales. ' +
@@ -2068,6 +2109,25 @@ function renderPackages() {
 }
 
 function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* Untick every block that cannot be billed as it stands.
+ *
+ * Deliberately the same predicate the warning above counts, so the button never
+ * claims more than it does. It only ever unticks: a block the operator has
+ * already set aside stays set aside, and nothing that CAN be billed is touched. */
+function untickUnbillable() {
+  var n = 0, money = 0;
+  ST.packages.forEach(function (P) {
+    if (P.use === false) return;
+    var x = CB.packageCrossCheck(P.parsed, ST.cfg);
+    if (!P.parsed.lines.length || !x.gross) return;      // nothing sold: leave it
+    if (P.pharmacy && P.brand && x.ok) return;           // billable: leave it
+    P.use = false; n++; money += x.gross;
+  });
+  if (!n) { toast('Every ticked block can be billed', 'ok'); return; }
+  renderPackages();
+  toast(n + ' block(s) left out of this run \u2014 ' + M(money) + ' of sales', 'warn');
+}
 
 /* Same as mapPharmacy on the Review tab, redrawing the import screen instead.
  * The alias is stored against the pharmacy, so it settles this sheet and every

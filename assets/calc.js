@@ -2722,19 +2722,48 @@
     var dups = order.filter(function (k) {
       return seen[k].length > 1 && distinctSheets(seen[k]) === 1;
     });
-    var merged = order.filter(function (k) {
-      return seen[k].length > 1 && distinctSheets(seen[k]) > 1;
+    /* Two tabs on one pharmacy record, counted per RECORD and regardless of brand.
+     *
+     * The index above is keyed by brand because that is what makes a repeated
+     * FILE a repeated file. For this fault the brand is beside the point: what
+     * is wrong is that two shops resolved to one master record, and one of them
+     * will be billed for the other's goods whether or not they stock the same
+     * things. Keyed by brand, Megacare Pharmacy and Megacare Pharmacy-Dong Ma -
+     * one record, two outlets, different brands - raised nothing, and the month
+     * would have put RM56,334 and RM2,548 on one invoice with one management
+     * fee. Five of the nine collisions in the August workbook were that shape. */
+    var byRecord = {}, recOrder = [];
+    live.forEach(function (p) {
+      if (!p.pharmacy) return;                 // an unmatched sheet is a different warning
+      var id = p.pharmacy.code || p.pharmacy.trading;
+      if (!byRecord[id]) { byRecord[id] = { who: p.pharmacy, tabs: {}, order: [] }; recOrder.push(id); }
+      var e = byRecord[id];
+      if (!e.tabs[p.name]) { e.tabs[p.name] = 0; e.order.push(p.name); }
+      e.tabs[p.name] += sum(p.parsed.lines, function (l) { return l.price; });
     });
-    if (merged.length) {
-      var who = seen[merged[0]][0];
+    recOrder = recOrder.filter(function (id) { return byRecord[id].order.length > 1; });
+
+    if (recOrder.length) {
+
+      /* Every one of them, largest first - the operator works down this list and
+         a group left off it is a decision nobody knows they have to make. */
+      var rows = recOrder.map(function (id) {
+        var e = byRecord[id];
+        return {
+          pharmacy: (e.who ? (e.who.code + ' ' + e.who.trading) : id),
+          registered: (e.who && e.who.contact) || '',
+          tabs: e.order.map(function (t) { return { name: t, gross: r2(e.tabs[t]) }; }),
+          gross: r2(sum(e.order, function (t) { return e.tabs[t]; }))
+        };
+      }).sort(function (a, b) { return b.gross - a.gross; });
+
       out.push({
         kind: 'duplicate',
-        text: merged.length + ' pharmacy record(s) are claimed by more than one sheet, so one shop ' +
-          'would be billed for another\u2019s goods. First: ' +
-          seen[merged[0]].map(function (p) { return p.name; }).join(' and ') +
-          ' all resolved to ' + ((who.pharmacy && (who.pharmacy.code + ' ' + who.pharmacy.trading)) || '?') +
-          '. Check the pharmacy master has a separate record per branch, and that each ' +
-          'branch\u2019s registered name carries its own suffix.'
+        rows: rows,
+        text: rows.length + ' pharmacy record(s) are claimed by more than one sheet, so one shop ' +
+          'would be billed for another\u2019s goods. Each one is a separate decision: two tabs for ' +
+          'one shop can be left as one, but two different companies need two records. Untick the ' +
+          'sheet that does not belong, or add the missing record on the Master data tab.'
       });
     }
     if (dups.length) {
