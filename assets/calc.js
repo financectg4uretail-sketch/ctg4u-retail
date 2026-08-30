@@ -2750,6 +2750,27 @@
     var confirmed = byAlias(nameOnTab) || byAlias(contactOnSheet);
     if (confirmed) return confirmed;
 
+    /* The company the sheet names, taken at its word.
+     *
+     * Matched on the record's REGISTERED name only - that is what D1 is - and
+     * exactly, give or take case and punctuation, because "SDN. BHD." and
+     * "SDN BHD" are one company written two ways while a branch suffix is not.
+     * Two records under one name is the master contradicting itself, and the
+     * honest answer there is to decide nothing. */
+    var statedCompany = function (raw) {
+      var k = normKey(raw);
+      if (!k) return null;
+      var hits = pharmacies.filter(function (p) { return normKey(p.contact) === k; });
+      if (!hits.length) return { pharmacy: null, how: null, rivals: null, tried: true };
+      if (hits.length > 1) return { pharmacy: null, how: null, rivals: hits, tried: true };
+      return { pharmacy: hits[0], how: 'registered name', rivals: null, tried: true };
+    };
+    var stated = statedCompany(contactOnSheet);
+    /* Nothing else is consulted once the sheet has named a company. A shop name
+       that resembles some other record is not evidence against what the sheet
+       says - it is how one company's goods get billed to another. */
+    if (stated) return { pharmacy: stated.pharmacy, how: stated.how, rivals: stated.rivals };
+
     var byContact = contactOnSheet
       ? bestMatch(contactOnSheet, pharmacies, ['contact', 'trading', 'code'], 0.72) : null;
     var byName = nameOnTab
