@@ -321,7 +321,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=5983b850c7"></script>
+<script src="assets/calc.js?v=de1ba1ad1c"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -342,7 +342,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '2627828bb9d2';
+  var MINE = '454c4195d7eb';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -5127,6 +5127,19 @@ var CFG_FIELDS = {
     ['coPhone', 'Contact phone', '', 'text']
   ],
   terms: [
+    /* Who the pharmacy invoice says supplied the goods.
+       CTG4U collects for the brand owner and earns nothing on the goods, so the
+       invoice is issued FOR them - and an invoice that never names the supplier
+       cannot show that. Named per line because one invoice routinely carries
+       five or six brand owners, and because the description is the field that
+       always prints: the tracking category already holds the brand owner and
+       never reaches the pharmacy's copy.
+       Turn it off only if CTG4U ever sells on its own account, where putting
+       another company's name on a line would be wrong. */
+    ['nameSupplierOnLine', 'Name the brand owner on each invoice line',
+      'The pharmacy invoice is issued for the brand owner who supplied the goods, so each ' +
+      'line says whose they are. Off means the line shows the product alone, which reads as ' +
+      'though CTG4U sold it', 'bool'],
     ['discountPct', 'Pharmacy discount %', 'Taken off every line and rounded there', 'number'],
     ['mgmtFeePerPharmacy', 'Management fee per pharmacy (MYR)', 'Charged once per pharmacy by each brand owner', 'number'],
     ['serviceFeePct', 'Service fee % of gross sales', 'Calculated before the discount, not after', 'number'],
@@ -5192,9 +5205,32 @@ var CFG_FIELDS = {
     ['trackingCategory', 'Tracking category', 'Name it exactly as Xero has it. Blank turns tracking off', 'text'],
     ['trackingBy', 'Tag each line by', 'A pharmacy carrying several brands gets a different tag per line', 'choice',
       [['brandOwner', 'Brand owner'], ['pharmacy', 'Pharmacy']]],
-    ['trackingCategory2', 'Second category (optional)', 'Xero allows two', 'text'],
+    ['trackingCategory2', 'Second category (optional)', 'Xero allows two &mdash; and only two. '
+      + 'Leave this blank when the MyInvois classification below is in use, or a line would carry '
+      + 'three and Xero would reject it', 'text'],
     ['trackingBy2', 'Tag the second by', 'Only used when a second category is named', 'choice',
-      [['pharmacy', 'Pharmacy'], ['brandOwner', 'Brand owner']]]
+      [['pharmacy', 'Pharmacy'], ['brandOwner', 'Brand owner']]],
+
+    /* The MyInvois classification. Xero holds no e-Invoice field of its own -
+       neither the invoice nor the line item has one - so the connector that
+       submits to IRBM reads the code off a tracking category it creates.
+       Unlike the two above, the code is decided by what the DOCUMENT IS: the
+       same brand owner and the same pharmacy appear on all three with three
+       different codes. Hence three settings, not another "tag by".
+       Typed rather than chosen from a list: there are forty-five codes and they
+       belong to Xero, not to this application. A wrong one is refused before
+       anything is created, with what Xero does have in the message. */
+    ['myinvoisCategory', 'MyInvois classification category', 'The tracking category the e-Invoice '
+      + 'connector created in Xero &mdash; usually <span class="mono">MyInvois Classification</span>. '
+      + 'Blank turns all of this off', 'text'],
+    ['myinvoisSales', 'Code for a pharmacy invoice', 'What this document is: the platform '
+      + 'invoicing the buyer for the brand owner. Must match the Xero option exactly, e.g. '
+      + '<span class="mono">008 - e-Commerce - e-Invoice to buyer / purchaser</span>', 'text'],
+    ['myinvoisPayout', 'Code for a payout bill', 'The platform self-billing the brand owner for '
+      + 'what it collected, e.g. <span class="mono">009 - e-Commerce - Self-billed e-Invoice to '
+      + 'seller, logistics, etc.</span>', 'text'],
+    ['myinvoisFee', 'Code for a fee invoice', 'CTG4U&rsquo;s own service, billed to the brand '
+      + 'owner, e.g. <span class="mono">022 - Others</span>', 'text']
   ]
 };
 function renderCfg() {

@@ -276,6 +276,11 @@
      * which account it lands in and what it is called.
      *
      * Default true, because that is what every run before this one did. */
+    /* Off by default: an organisation selling on its own account must not put
+       another company's name on its invoice lines. Switched on where the sale
+       is made for someone else, as this one is. */
+    nameSupplierOnLine: true,
+
     sstIsTax: true,
     /* Where the charge lands when it is NOT a tax. Blank falls back to the
        service fee account, the same way insurance already does. */
@@ -306,6 +311,14 @@
     trackingBy: 'brandOwner',    // 'brandOwner' | 'pharmacy'
     trackingCategory2: '',       // Xero allows a second category
     trackingBy2: 'pharmacy',
+
+    /* The MyInvois classification, which Invoici reads off a tracking category
+       it creates in Xero. Decided by what the document IS, not by which party
+       is on it, so it takes three settings of its own. Blank turns it off. */
+    myinvoisCategory: '',        // e.g. 'MyInvois Classification'
+    myinvoisSales: '',           // pharmacy invoice - the platform billing the buyer
+    myinvoisPayout: '',          // payout bill - the platform self-billing the seller
+    myinvoisFee: '',             // fee invoice - the platform's own service
 
     dueDays: 30,
     period: '',                  // 'YYYY-MM'
@@ -804,14 +817,32 @@
    * against a full payout - the amount itself is billed and the detail moves
    * into words. A line Xero computes differently from the settlement is money
    * with no owner. */
+  /* Who supplied the goods on this line.
+   *
+   * CTG4U collects for the brand owner and earns nothing on the goods, so the
+   * invoice is issued FOR them. One invoice carries several of them - the lines
+   * are grouped by brand owner already - which is why the supplier is named per
+   * line and not once at the top, where it could only ever name one of five.
+   *
+   * In the description because that is the field that always prints. The
+   * tracking category already carries the brand owner and never reaches the
+   * pharmacy's copy. */
+  function supplierPrefix(item, c) {
+    if (!cfg(c).nameSupplierOnLine) return '';
+    var p = item && item.project;
+    var who = p ? (p.xeroContact || p.name || p.code || '') : '';
+    return who ? (String(who).trim() + ' \u2014 ') : '';
+  }
+
   function invoiceShape(item, c) {
     var q = num(item.qty), u = r2(item.unitPrice);
+    var who = supplierPrefix(item, c);
     if (q > 0 && u > 0 && r2(q * u) === r2(item.gross)) {
-      return { qty: q, unit: u, description: item.description };
+      return { qty: q, unit: u, description: who + item.description };
     }
     return {
       qty: 1, unit: r2(item.gross),
-      description: item.description +
+      description: who + item.description +
         (q > 0 && u > 0 ? ' (' + q + ' x ' + money(u) + ')' : '')
     };
   }
@@ -1000,7 +1031,17 @@
 
   /* The two tracking pairs for a line, as Xero wants them. Returns [] when no
    * category is configured, so tracking simply does not appear. */
-  function trackingPairs(c, pharmacy, project) {
+  /* The classification for a document kind, or '' when it is switched off. */
+  function myinvoisOption(c, kind) {
+    if (!c || !String(c.myinvoisCategory || '').trim()) return '';
+    var by = { sales: c.myinvoisSales, payout: c.myinvoisPayout, fee: c.myinvoisFee };
+    if (kind && !Object.prototype.hasOwnProperty.call(by, kind)) {
+      throw new Error('No MyInvois classification for document kind: ' + kind);
+    }
+    return String(by[kind] || '').trim();
+  }
+
+  function trackingPairs(c, pharmacy, project, kind) {
     var out = [];
     if (c.trackingCategory) {
       var o1 = trackingOption(c.trackingBy, pharmacy, project);
@@ -1009,6 +1050,17 @@
     if (c.trackingCategory2) {
       var o2 = trackingOption(c.trackingBy2, pharmacy, project);
       if (o2) out.push({ name: c.trackingCategory2, option: o2 });
+    }
+    var o3 = myinvoisOption(c, kind);
+    if (o3) out.push({ name: String(c.myinvoisCategory).trim(), option: o3 });
+
+    /* Xero takes two and rejects the line on a third. Refused here, where the
+       message can say which three are set, rather than by Xero one line at a
+       time after the month has been finalised. */
+    if (out.length > 2) {
+      throw new Error('Xero allows two tracking categories on a line and this run has ' +
+        out.length + ': ' + out.map(function (t) { return t.name; }).join(', ') +
+        '. Clear one on the Settings tab.');
     }
     return out;
   }
@@ -1560,7 +1612,7 @@
           '*AccountCode': c.acctPassThrough,
           '*TaxType': c.taxTypeExempt,
           'Currency': 'MYR'
-        }, trackingCells(trackingPairs(c, B.pharmacy, it.project))));
+        }, trackingCells(trackingPairs(c, B.pharmacy, it.project, 'sales'))));
       });
     });
     return { columns: SALES_COLS, rows: rows };
@@ -1585,7 +1637,7 @@
         'InventoryItemCode': '',
         'Discount': '',
         'Currency': 'MYR'
-      }, trackingCells(trackingPairs(c, null, S.project)));
+      }, trackingCells(trackingPairs(c, null, S.project, 'fee')));
       /* A tax type only where the 8% really is a tax. Unregistered, every line
          is exempt and the 8% follows as a line of its own below. */
       var taxed = function (on) { return (c.sstIsTax && on) ? c.taxTypeSST : c.taxTypeExempt; };
@@ -1664,7 +1716,7 @@
           '*AccountCode': c.acctPassThrough,
           '*TaxType': c.taxTypeExempt,
           'Currency': 'MYR'
-        }, trackingCells(trackingPairs(c, B.pharmacy, S.project))));
+        }, trackingCells(trackingPairs(c, B.pharmacy, S.project, 'payout'))));
       });
     });
     return { columns: BILL_COLS, rows: rows };
