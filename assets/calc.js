@@ -484,9 +484,23 @@
   function resolveLines(rawLines, master, c) {
     c = cfg(c);
     var disc = c.discountPct / 100;
-    var pharmacies = master.pharmacies || [];
-    var products = master.products || [];
-    var projects = master.projects || [];
+    /* Switched off means not billed again. The flag is on every master table
+       and the screens offer it, but until this the matcher read none of them:
+       a brand owner deactivated on Monday was invoiced on Friday exactly as
+       before, because its products and aliases were still in the index.
+
+       Opt-out, so a master imported from a spreadsheet - which carries no such
+       field - behaves as it always has.
+
+       Matching only. A resolved line carries an id and a finalised run points
+       at records directly, so switching something off never disturbs the months
+       it was already part of. */
+    var live = function (list) {
+      return (list || []).filter(function (x) { return !x || x.active !== false; });
+    };
+    var pharmacies = live(master.pharmacies);
+    var products = live(master.products);
+    var projects = live(master.projects);
 
     // Product -> project lookup, exact first for speed then fuzzy.
     // Aliases are what the operator confirmed by hand in a previous month; they

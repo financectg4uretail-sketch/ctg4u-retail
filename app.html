@@ -321,7 +321,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=5c3074ae8e"></script>
+<script src="assets/calc.js?v=5983b850c7"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -342,7 +342,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'b2d9270a39e5';
+  var MINE = '2627828bb9d2';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
