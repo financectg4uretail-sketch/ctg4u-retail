@@ -514,6 +514,30 @@
       };
 
       // --- pharmacy
+      /* Already decided, upstream, and by better evidence than a name.
+       *
+       * A package block is matched to its pharmacy on the import screen - on the
+       * company in cell D1, exactly, or on an alias somebody confirmed - and
+       * that answer is carried here rather than re-derived. Re-deriving cannot
+       * do better and can do worse: two records answering to one name is a tie
+       * downstream, and a tie drops the shop out of the month. */
+      var byCode = null;
+      if (L.pharmacyCode) {
+        var wantCode = String(L.pharmacyCode).trim().toUpperCase();
+        for (var pci = 0; pci < pharmacies.length; pci++) {
+          if (String(pharmacies[pci].code || '').trim().toUpperCase() === wantCode) {
+            byCode = pharmacies[pci]; break;
+          }
+        }
+        if (!byCode) out.issues.push('pharmacy ' + L.pharmacyCode + ' is no longer in the master');
+      }
+      if (byCode) {
+        out.pharmacy = byCode;
+        out.pharmacyScore = 1;
+        out.pharmacySuggestion = null;
+        out.pharmacyRivals = null;
+      }
+
       var pk = normKey(out.pharmacyRaw);
       if (!(pk in pharmCache)) {
         var pClash = pharmIndex.rivals(pk), pExact = pharmIndex.get(pk);
@@ -538,11 +562,14 @@
        * exactly 1.0 against a sheet naming either. A tie at 1.0 is still a tie,
        * and it was the only kind being broken quietly. */
       var ambiguous = !!(pm && pm.rivals > 1);
-      out.pharmacy = pm && !ambiguous ? pm.item : null;
-      out.pharmacyScore = pm ? pm.score : 0;
-      out.pharmacySuggestion = ambiguous ? pm.item : null;
-      out.pharmacyRivals = ambiguous ? pm.tied : null;
-      if (!out.pharmacyRaw) out.issues.push('no pharmacy on row');
+      if (!byCode) {
+        out.pharmacy = pm && !ambiguous ? pm.item : null;
+        out.pharmacyScore = pm ? pm.score : 0;
+        out.pharmacySuggestion = ambiguous ? pm.item : null;
+        out.pharmacyRivals = ambiguous ? pm.tied : null;
+      }
+      if (byCode) { /* settled upstream; the notes below are about guessing */ }
+      else if (!out.pharmacyRaw) out.issues.push('no pharmacy on row');
       else if (ambiguous) {
         out.issues.push('pharmacy name matches ' + pm.rivals + ' branches equally: ' +
           pm.tied.map(function (x) { return x.trading || x.contact; }).join(', '));

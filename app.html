@@ -320,7 +320,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=eb831c106a"></script>
+<script src="assets/calc.js?v=e89c53c7a6"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -341,7 +341,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'c41cc7f440ed';
+  var MINE = '63a814239302';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2276,6 +2276,10 @@ function buildFromPackages() {
       raw.push({
         _sheet: P.name, _row: 0,
         pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
+        /* The block's pharmacy was settled on this screen, on the company named
+           in D1 or on a confirmed alias. Sent with the line so the money side
+           does not have to work it out again from a name two records can share. */
+        pharmacyCode: P.pharmacy.code,
         productRaw: l.pkg,
         qty: l.qty, unitPrice: l.price, amount: null,
         /* what was inside the packages on this line, so the stock ledger can
@@ -2301,6 +2305,7 @@ function buildFromPackages() {
       raw.push({
         _sheet: P.name, _row: 0,
         pharmacyRaw: P.pharmacy.contact || P.pharmacy.trading,
+        pharmacyCode: P.pharmacy.code,
         productRaw: g.pkg,
         qty: g.qty, unitPrice: 0, amount: 0,
         parts: g.parts, projectCode: (P.brand ? P.brand.code : owner), strictProduct: true
