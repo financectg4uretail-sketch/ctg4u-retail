@@ -310,6 +310,11 @@
     dueDays: 30,
     period: '',                  // 'YYYY-MM'
     invoiceDate: '',             // 'YYYY-MM-DD', defaults to period month-end
+    /* The period the documents actually cover, when it is not the calendar
+       month. Both or neither: half a range on a document that leaves the
+       building is worse than no range at all. */
+    periodFrom: '',              // 'YYYY-MM-DD', inclusive
+    periodTo: '',                // 'YYYY-MM-DD', inclusive
     pharmacyInvPrefix: 'CTG4U',  // -> CTG4U2607-0001
     serviceInvPrefix: 'CTGSF',
     payoutBillPrefix: 'CTGPO',
@@ -428,6 +433,36 @@
     if (!m) return String(period || '');
     var names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return names[+m[2] - 1] + ' ' + m[1];
+  }
+
+  /* What a document calls the period it covers: the dates when the operator
+     has set them, the calendar month otherwise. One function, so the invoice,
+     the fee invoice and the settlement can never disagree about the month they
+     are all part of. */
+  function periodPhrase(c) {
+    var f = String((c && c.periodFrom) || '').trim();
+    var t = String((c && c.periodTo) || '').trim();
+    return (f && t) ? (dmy(f) + ' Till ' + dmy(t)) : periodLabel(c && c.period);
+  }
+
+  /* What each document calls itself, followed by the period it covers.
+     One function so the sentence has one shape and only the noun moves.
+
+     The payout bill says "Settlement", never "Services Fee": it is CTG4U
+     paying a brand owner for goods sold, and naming that a service fee
+     describes the money as travelling the other way. */
+  var REF_NOUN = {
+    sales: ['Consignment Billing Period ', 'Consignment sales '],
+    fee: ['Consignment Services Fee Period ', 'Fees '],
+    payout: ['Consignment Settlement Period ', 'Consignment settlement ']
+  };
+
+  function docReference(kind, c) {
+    var w = REF_NOUN[kind];
+    if (!w) throw new Error('No reference wording for document kind: ' + kind);
+    return (c && c.periodFrom && c.periodTo)
+      ? w[0] + periodPhrase(c)
+      : w[1] + periodLabel(c && c.period);
   }
 
   function periodYYMM(period) {
@@ -1500,7 +1535,7 @@
           '*ContactName': B.pharmacy.contact || B.pharmacy.trading,
           'EmailAddress': i === 0 ? (B.pharmacy.email || '') : '',
           '*InvoiceNumber': no,
-          'Reference': 'Consignment sales ' + periodLabel(c.period),
+          'Reference': docReference('sales', c),
           '*InvoiceDate': dmy(d.idate),
           '*DueDate': dmy(d.ddate),
           'InventoryItemCode': '',
@@ -1530,7 +1565,7 @@
         '*ContactName': S.project.xeroContact || S.project.name,
         'EmailAddress': S.project.email || '',
         '*InvoiceNumber': no,
-        'Reference': 'Fees ' + periodLabel(c.period),
+        'Reference': docReference('fee', c),
         '*InvoiceDate': dmy(d.idate),
         '*DueDate': dmy(d.ddate),
         'InventoryItemCode': '',
@@ -1604,7 +1639,7 @@
         rows.push(assign({
           '*ContactName': S.project.xeroContact || S.project.name,
           '*InvoiceNumber': no,
-          'Reference': 'Consignment settlement ' + periodLabel(c.period),
+          'Reference': docReference('payout', c),
           '*InvoiceDate': dmy(d.idate),
           '*DueDate': dmy(d.ddate),
           'InventoryItemCode': '',
@@ -3500,6 +3535,7 @@
     normKey: normKey, similarity: similarity, bestMatch: bestMatch,
     monthEnd: monthEnd,
     monthStart: monthStart, addDays: addDays, dmy: dmy, periodLabel: periodLabel, periodYYMM: periodYYMM,
+    periodPhrase: periodPhrase, docReference: docReference,
     feeChargeLabel: feeChargeLabel,
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,

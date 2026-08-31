@@ -164,7 +164,8 @@
       <span class="mono">*ContactName</span> strings are read straight off it &mdash; no typing, so an import can never
       be rejected for a mis-typed name. Nothing is sent anywhere; the file is read in this browser.</div>
     <div class="row">
-      <button class="btn sm ro-only" onclick="loadXeroContacts(this)">⭳ Load from Xero</button>
+      <button class="btn sm ro-only" data-xero-read data-label="⭳ Load from Xero"
+        onclick="loadXeroContacts(this)">⭳ Load from Xero</button>
       <button class="btn sm ghost" onclick="$('#fileXeroContacts').click()">⬆ Import Xero contact export</button>
       <span class="mut" id="xcStatus">no contact list loaded</span>
       <input type="file" id="fileXeroContacts" accept=".csv,.xlsx,.xls" hidden>
@@ -320,7 +321,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=e89c53c7a6"></script>
+<script src="assets/calc.js?v=06ee0adfd4"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -341,7 +342,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '63a814239302';
+  var MINE = 'e51e3ef3bb00';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -4512,10 +4513,10 @@ function renderXeroContacts() {
        already are rather than typed sixty-two times. */
     '<div style="margin-top:16px"><b>Complete the pharmacy particulars</b>' +
     '<div class="hint">Every document carries both parties&rsquo; full name, address, ' +
-    'registration number and TIN. Xero holds the address and the tax number already &mdash; ' +
+    'registration number and TIN. Xero holds all three already &mdash; ' +
     'this fills in the blanks and replaces nothing.</div>' +
     '<div class="row" style="margin-top:8px">' +
-    '<button class="btn sm" onclick="fillParticularsFromXero()">Fill missing address and TIN from Xero</button>' +
+    '<button class="btn sm" onclick="fillParticularsFromXero()">Fill missing particulars from Xero</button>' +
     '</div></div>' +
 
     '<div style="margin-top:16px"><b>Add a contact as a brand owner</b>' +
@@ -4597,6 +4598,11 @@ function fillParticularsFromXero() {
     var row = { id: p.id }, n = 0;
     if (!String(p.address || '').trim() && c.address) { row.address = c.address; n++; }
     if (!String(p.tin || '').trim() && c.taxNumber) { row.tin = c.taxNumber; n++; }
+    /* Xero's own name for it is "Company registration number". The contacts
+       feed has always returned it and nothing here ever wrote it, so a
+       pharmacy missing a BRN stayed missing one through a run that reported
+       itself complete. */
+    if (!String(p.brn || '').trim() && c.companyNumber) { row.brn = c.companyNumber; n++; }
     if (!String(p.email || '').trim() && c.email) { row.email = c.email; n++; }
     if (n) todo.push({ row: row, name: p.trading, fields: n });
   });
@@ -4645,7 +4651,7 @@ function addPharmaciesFromXero() {
       (add.length > 12 ? NL + '  and ' + (add.length - 12) + ' more' : '') + NL + NL +
       (thin.length ? thin.length + ' of them are missing a TIN, a company number or an address, ' +
         'which every invoice and statement has to carry. They are still added; fill the gaps in ' +
-        'Xero and use "Fill missing address and TIN" afterwards.' + NL + NL : '') +
+        'Xero and use "Fill missing particulars" afterwards.' + NL + NL : '') +
       'Nothing already here is changed.')) return;
 
   toast('Adding ' + add.length + ' pharmacy(s)\u2026');
@@ -4950,7 +4956,19 @@ function xeroBusy(on, btn) {
   [].slice.call(document.querySelectorAll('[data-xero-read]')).forEach(function (b) {
     b.disabled = on;
   });
-  if (btn) btn.textContent = on ? 'Reading from Xero…' : btn.getAttribute('data-label');
+  /* A button without data-label used to have its caption set to null and come
+     back empty - which is what happened to Load from Xero: it read the
+     contacts, erased its own label and sat there as a blank box. A caption is
+     something the button already has; remember it rather than require it to be
+     declared twice. */
+  if (btn) {
+    if (on) {
+      if (!btn.getAttribute('data-label')) btn.setAttribute('data-label', btn.textContent);
+      btn.textContent = 'Reading from Xero…';
+    } else {
+      btn.textContent = btn.getAttribute('data-label') || btn.textContent;
+    }
+  }
 }
 
 function pullOrg(btn) {
@@ -5139,7 +5157,12 @@ var CFG_FIELDS = {
     ['startPharmacy', 'First pharmacy invoice number', 'Leave at 0 to use the fallback above', 'number'],
     ['startFee', 'First fee invoice number', 'Leave at 0 to use the fallback above', 'number'],
     ['startPayout', 'First payout bill number', 'Leave at 0 to use the fallback above', 'number'],
-    ['invoiceDate', 'Document date (blank = month end)', 'Applies to all three document types', 'date']
+    ['invoiceDate', 'Document date (blank = month end)', 'Applies to all three document types', 'date'],
+    ['periodFrom', 'Billing period from', 'The period the documents cover, when it is not the '
+      + 'calendar month. Set both and every reference reads "Consignment Billing Period '
+      + '21/07/2026 Till 20/08/2026"', 'date'],
+    ['periodTo', 'Billing period till', 'Set both or leave both blank \u2014 a half range is not '
+      + 'printed', 'date']
   ],
   tracking: [
     ['trackingCategory', 'Tracking category', 'Name it exactly as Xero has it. Blank turns tracking off', 'text'],
