@@ -321,7 +321,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=06ee0adfd4"></script>
+<script src="assets/calc.js?v=5c3074ae8e"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -342,7 +342,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = 'e51e3ef3bb00';
+  var MINE = 'b2d9270a39e5';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -3728,6 +3728,30 @@ function renderReview() {
     chip(pk.length + ' unmapped product(s)', pk.length ? 'warn' : 'ok') +
     chip(hk.length + ' pharmacy(s) to confirm', hk.length ? 'warn' : 'ok') +
     '</div></div>';
+
+  /* Said before anything else on this screen, because it is the one fault here
+     that makes every number below it wrong by the same factor - and the only
+     one no later check can catch: the cross-check weighs invoices against
+     settlements, and both halves double together. */
+  var dupSheets = CB.duplicateSheets(ST.lines);
+  if (dupSheets.length) {
+    h += '<div class="card"><div class="note bad"><b>' +
+      (dupSheets.length === 1 ? 'Two sheets carry the same sales'
+        : dupSheets.length + ' sets of sheets carry the same sales') +
+      '</b> &mdash; this month is being counted more than once, and every figure ' +
+      'below is too big by ' +
+      M(CB.sumMoney(dupSheets, function (g) { return g.excess; })) + '. ' +
+      'Go back to the import and untick the copy.' +
+      '<div class="scroll" style="max-height:200px;margin-top:9px"><table>' +
+      '<tr><th>These sheets hold identical rows</th><th class="num">Rows</th>' +
+      '<th class="num">Each</th><th class="num">Counted</th></tr>' +
+      dupSheets.map(function (g) {
+        return '<tr><td>' + g.sheets.map(esc).join('<br>') + '</td>' +
+          '<td class="num">' + g.rows + '</td>' +
+          '<td class="num">' + M(g.gross) + '</td>' +
+          '<td class="num">' + M(g.counted) + '</td></tr>';
+      }).join('') + '</table></div></div></div>';
+  }
 
   if (ST.skipped && ST.skipped.length) {
     h += '<div class="card"><h2>Rows skipped as totals or blanks</h2>' +

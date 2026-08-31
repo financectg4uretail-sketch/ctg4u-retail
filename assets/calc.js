@@ -2893,6 +2893,51 @@
    *
    * `packages` is the import screen's list: each carries pharmacy, brandRaw,
    * periodLabel and parsed. */
+  /* Two sheets of one workbook carrying the same sales.
+   *
+   * The duplicate guard elsewhere watches for the same FILE arriving twice. A
+   * working copy repeats itself inside one file instead - a staging sheet and a
+   * diagnostics sheet, the same rows twice - and the month is read at double
+   * size. Nothing downstream can see it: the cross-check weighs invoices
+   * against settlements and both halves double together, so it balances.
+   *
+   * Fingerprinted rather than totalled: two sheets summing alike happens all
+   * the time. The fingerprint names the SHOP as well as the product, because
+   * without it two thin sheets from different shops selling one popular
+   * promotion at the same price read as copies of each other - measured on a
+   * real month, and it would have reported a correct month as double-counted. */
+  function duplicateSheets(lines) {
+    var by = {};
+    (lines || []).forEach(function (l) {
+      var s = l._sheet || '';
+      if (!by[s]) by[s] = { name: s, rows: [], gross: 0 };
+      by[s].rows.push(normKey(l.pharmacyRaw) + '|' + normKey(l.productRaw) +
+                      '|' + num(l.qty) + '|' + r2(num(l.gross)));
+      by[s].gross = r2(by[s].gross + num(l.gross));
+    });
+
+    var groups = {}, order = [];
+    Object.keys(by).forEach(function (s) {
+      var v = by[s];
+      if (!v.gross) return;                       // a sheet with no money is not a copy
+      var fp = v.rows.slice().sort().join(String.fromCharCode(1));
+      if (!groups[fp]) { groups[fp] = []; order.push(fp); }
+      groups[fp].push(v);
+    });
+
+    return order.filter(function (fp) { return groups[fp].length > 1; })
+      .map(function (fp) {
+        var g = groups[fp];
+        return {
+          sheets: g.map(function (v) { return v.name; }),
+          rows: g[0].rows.length,
+          gross: g[0].gross,
+          counted: r2(g.reduce(function (t, v) { return t + v.gross; }, 0)),
+          excess: r2(g[0].gross * (g.length - 1))
+        };
+      });
+  }
+
   function blockWarnings(packages, c, acceptedCollisions) {
     c = cfg(c);
     /* Records the operator has confirmed really are one shop written on two
@@ -3560,6 +3605,8 @@
     isRetailerSheet: isRetailerSheet, parseRetailerSheets: parseRetailerSheets,
     pickPharmacy: pickPharmacy, PICK_MARGIN: PICK_MARGIN,
     periodOfLabel: periodOfLabel, blockWarnings: blockWarnings,
+    duplicateSheets: duplicateSheets,
+    duplicateSheets: duplicateSheets,
     isPackageSheet: isPackageSheet, parsePackageSheet: parsePackageSheet,
     parsePackageSheets: parsePackageSheets, packageHeaderRows: packageHeaderRows,
     packageLines: packageLines, packageCrossCheck: packageCrossCheck
