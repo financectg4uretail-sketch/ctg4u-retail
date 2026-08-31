@@ -320,7 +320,7 @@
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
 <script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=283242b327"></script>
+<script src="assets/calc.js?v=eb831c106a"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -341,7 +341,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '856533342d62';
+  var MINE = 'c41cc7f440ed';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -1799,7 +1799,7 @@ function renderPackages() {
      block or caught downstream: a block counted twice doubles both sides of the
      cross-check and still balances, and a period nobody compared produces a
      complete month dated to the wrong one. */
-  var batch = CB.blockWarnings(ST.packages, ST.cfg);
+  var batch = CB.blockWarnings(ST.packages, ST.cfg, Object.keys(ST.acceptedCollisions || {}));
 
   /* The lists below show EVERY block, because a shop left out of a month has to
      be visible - that is the whole reason they are listed with their gross. The
@@ -1855,13 +1855,23 @@ function renderPackages() {
          these decides which company gets billed for the goods. */
       (w.rows && w.rows.length
         ? '<div class="scroll" style="max-height:240px;margin-top:9px"><table>' +
-          '<tr><th>Master record</th><th>Claimed by these sheets</th><th class="num">Gross</th></tr>' +
+          '<tr><th>Master record</th><th>Claimed by these sheets</th><th class="num">Gross</th>' +
+          (w.kind === 'collision' ? '<th></th>' : '') + '</tr>' +
           w.rows.map(function (g) {
+            var code = String(g.pharmacy).split(' ')[0];
             return '<tr><td>' + esc(g.pharmacy) +
               (g.registered ? '<div class="mut">' + esc(g.registered) + '</div>' : '') + '</td><td>' +
               g.tabs.map(function (t) {
                 return esc(t.name) + ' <span class="mut">' + M(t.gross) + '</span>';
-              }).join('<br>') + '</td><td class="num">' + M(g.gross) + '</td></tr>';
+              }).join('<br>') + '</td><td class="num">' + M(g.gross) + '</td>' +
+              /* The other half of the sentence above. Unticking drops a sheet's
+                 sales; this keeps both and puts them on the one invoice, which
+                 is what "can be left as one" means. */
+              (w.kind === 'collision'
+                ? '<td><button class="btn sm ghost ro-only" onclick="acceptCollision(&#39;' +
+                  esc(code) + '&#39;)">One shop &mdash; bill together</button></td>'
+                : '') +
+              '</tr>';
           }).join('') + '</table></div>'
         : '') +
       (w.suggest
@@ -2114,6 +2124,26 @@ function renderPackages() {
 }
 
 function setPackageOwner(code) { ST.packageOwner = code; renderPackages(); }
+
+/* "These two tabs are one shop": both sets of sales go on to that pharmacy's
+ * single invoice, which is what buildPharmacyBilling does anyway once the gate
+ * stops refusing. Held for this run only - see blockWarnings. */
+function acceptCollision(code) {
+  if (!requireWrite()) return;
+  ST.acceptedCollisions = ST.acceptedCollisions || {};
+  ST.acceptedCollisions[code] = true;
+  var tabs = {};
+  ST.packages.forEach(function (P) {
+    if (P.pharmacy && P.pharmacy.code === code && P.use !== false) {
+      tabs[P.name] = CB.r2((tabs[P.name] || 0) + CB.packageCrossCheck(P.parsed, ST.cfg).gross);
+    }
+  });
+  var names = Object.keys(tabs);
+  renderPackages();
+  toast(names.length + ' sheet(s) will be billed together on ' + code + ' \u2014 ' +
+    names.map(function (n) { return n + ' ' + M(tabs[n]); }).join(', '), 'ok');
+  DB.audit('collision_accepted', { pharmacy: code, sheets: names });
+}
 
 /* Untick every block that cannot be billed as it stands.
  *

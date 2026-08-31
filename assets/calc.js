@@ -2831,8 +2831,13 @@
    *
    * `packages` is the import screen's list: each carries pharmacy, brandRaw,
    * periodLabel and parsed. */
-  function blockWarnings(packages, c) {
+  function blockWarnings(packages, c, acceptedCollisions) {
     c = cfg(c);
+    /* Records the operator has confirmed really are one shop written on two
+       tabs. Passed in rather than remembered: the same two tabs next month are
+       worth looking at again, and a stored "yes" would bless a real mix-up. */
+    var accepted = {};
+    (acceptedCollisions || []).forEach(function (k) { accepted[String(k)] = 1; });
     var out = [];
     /* Only what is actually going to be billed.
      *
@@ -2893,7 +2898,9 @@
       if (!e.tabs[p.name]) { e.tabs[p.name] = 0; e.order.push(p.name); }
       e.tabs[p.name] += sum(p.parsed.lines, function (l) { return l.price; });
     });
-    recOrder = recOrder.filter(function (id) { return byRecord[id].order.length > 1; });
+    recOrder = recOrder.filter(function (id) {
+      return byRecord[id].order.length > 1 && !accepted[id];
+    });
 
     if (recOrder.length) {
 
