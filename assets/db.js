@@ -427,16 +427,27 @@
         .order('created_at', { ascending: false }).limit(limit || 50)
         .then(function (r) { return rows(r, 'List runs'); });
     },
+    /* Everything a finalised month needs to be printed again, not only listed.
+       The brand owner's registered details and bank account are on the
+       statement; the lines are what the product table is rebuilt from. Both
+       were missing, which is why a month's statements could only be produced
+       inside the session that created them. */
     getRun: function (id) {
       return Promise.all([
         sb.from('runs').select('*').eq('id', id).single(),
-        sb.from('run_settlements').select('*, brand_owners(code,name,xero_contact,email)').eq('run_id', id),
-        sb.from('documents').select('*').eq('run_id', id).order('number')
+        sb.from('run_settlements').select(
+          '*, brand_owners(code,name,xero_contact,email,brn,tax_no,address,phone,' +
+          'bank_name,bank_account_name,bank_account_no)').eq('run_id', id),
+        sb.from('documents').select('*').eq('run_id', id).order('number'),
+        sb.from('run_lines').select(
+          '*, pharmacies(code,trading,contact), brand_owners(code,name,xero_contact)')
+          .eq('run_id', id).order('id')
       ]).then(function (r) {
         return {
           run: one(r[0], 'Load run'),
           settlements: rows(r[1], 'Load settlements'),
-          documents: rows(r[2], 'Load documents')
+          documents: rows(r[2], 'Load documents'),
+          lines: rows(r[3], 'Load run lines')
         };
       });
     },

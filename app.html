@@ -277,8 +277,22 @@
       reports separately inside Xero without a separate account for each. Leave the category blank to
       switch it off. Both the category and the option must exist in Xero exactly as spelled &mdash; the
       connector checks every option it is about to use and refuses the run rather than losing the tag on
-      one line.</div>
+      one line. Xero allows <b>two</b> categories on a line and no more, and the MyInvois
+      classification below is one of them &mdash; so leave the second category blank while that is in
+      use.</div>
     <div class="grid g3" id="cfgTrack"></div>
+  </div>
+
+  <div class="card">
+    <h2>MyInvois classification</h2>
+    <div class="hint">Xero holds no e-Invoice field of its own, so the connector that submits to IRBM
+      reads the classification off a tracking category it creates &mdash; usually
+      <span class="mono">MyInvois Classification</span>, with the 45 codes as its options. Each code is
+      decided by <b>what the document is</b>, not by who is on it: the same brand owner appears on all
+      three with three different codes. Type them exactly as Xero has them; a code Xero does not have
+      is refused before anything is created, and the message says what it does have. Blank turns all of
+      this off.</div>
+    <div class="grid g3" id="cfgMyInvois"></div>
   </div>
 
   <div class="card">
@@ -320,8 +334,8 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=814a0d3161"></script>
-<script src="assets/calc.js?v=de1ba1ad1c"></script>
+<script src="assets/db.js?v=06e261f829"></script>
+<script src="assets/calc.js?v=fb8a4f785b"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -342,7 +356,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '454c4195d7eb';
+  var MINE = '000511def5f7';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -4148,6 +4162,16 @@ function renderOut() {
     '<button class="btn sm" onclick="printStatement(-1)">🖨 All statements</button>' +
     '</div></div>' +
 
+    '<div class="card"><h2>Payout run</h2>' +
+    '<div class="hint">Who to pay, how much, and into which account &mdash; one page, with the ' +
+    'subtraction shown. Each brand owner is owed the payout bill in full and is separately ' +
+    'invoiced the fees; the transfer is the difference. Print &rsaquo; Save as PDF, or read it ' +
+    'off the screen while paying.</div>' +
+    '<div class="row">' +
+    '<button class="btn" onclick="printPayoutRun()">\u{1F5A8} Payout run &mdash; ' +
+    M(CB.sumMoney(S.projects, function (p) { return p.totalPayout; })) + ' to ' +
+    S.projects.length + ' brand owner(s)</button></div></div>' +
+
     '<div class="card"><h2>Working file</h2>' +
     '<div class="hint">Every line, every calculation, every Xero row in one workbook — this is what you keep for the audit trail.</div>' +
     '<button class="btn" onclick="dlWorkbook()">⬇ Full report (xlsx)</button></div>';
@@ -4268,6 +4292,78 @@ function printStatement(idx) {
   catch (e) { err(e); toast(e.message, 'bad'); return; }
   var w = window.open('', '_blank');
   if (!w) { toast('Pop-up blocked — allow pop-ups for this page, then try again', 'bad'); return; }
+  w.document.write(doc);
+  w.document.close();
+  setTimeout(function () { w.focus(); w.print(); }, 350);
+}
+
+/* --------------------------------------------------------- reprint */
+/* A finished month's statement or payout run, rebuilt from what was stored.
+ *
+ * The figures and the document numbers come from the settlement rows, never
+ * from a recomputation: they were agreed when the month was finalised and they
+ * are on invoices in Xero. Only the per-pharmacy items are rebuilt, because
+ * they were never stored - and settlementFromRun holds that rebuild against the
+ * stored figures and refuses if the two disagree, so this either prints the
+ * month that happened or prints nothing.
+ *
+ * The run's own settings are used, not today's: a statement reprinted a year
+ * later should read the way it read when it was issued. */
+function reprint(runId, what) {
+  toast('Rebuilding that month\u2026');
+  DB.getRun(runId).then(function (d) {
+    var c = CB.cfg(d.run.cfg || {});
+    var stored = (d.settlements || []).map(function (s) {
+      var b = s.brand_owners || {};
+      return {
+        code: b.code || '', project: {
+          code: b.code, name: b.name, xeroContact: b.xero_contact || b.name,
+          email: b.email || '', brn: b.brn || '', taxNo: b.tax_no || '',
+          address: b.address || '', phone: b.phone || '',
+          bankName: b.bank_name || '', bankAccountName: b.bank_account_name || '',
+          bankAccountNo: b.bank_account_no || ''
+        },
+        pharmacyCount: s.pharmacy_count, salesAmount: s.sales_amount, discount: s.discount,
+        netSales: s.net_sales, mgmtFee: s.mgmt_fee, serviceFee: s.service_fee,
+        insuranceFee: s.insurance_fee, sst: s.sst, totalPayout: s.total_payout,
+        serviceInvoiceNumber: s.fee_invoice_number, payoutBillNumber: s.payout_bill_number,
+        byPharmacy: s.by_pharmacy || []
+      };
+    });
+    var lines = (d.lines || []).map(function (l) {
+      var ph = l.pharmacies || {}, bo = l.brand_owners || {};
+      return {
+        pharmacy: { code: ph.code, trading: ph.trading, contact: ph.contact },
+        project: { code: bo.code, name: bo.name, xeroContact: bo.xero_contact || bo.name },
+        productRaw: l.product_raw, qty: Number(l.qty),
+        unitPrice: Number(l.unit_price), gross: Number(l.gross)
+      };
+    });
+
+    var S = CB.settlementFromRun(stored, lines, c);
+    var doc = what === 'payout' ? CB.payoutRunDoc(S, c) : CB.statementDoc(S, c, -1);
+    var w = window.open('', '_blank');
+    if (!w) { toast('Pop-up blocked \u2014 allow pop-ups for this page, then try again', 'bad'); return; }
+    w.document.write(doc);
+    w.document.close();
+    setTimeout(function () { w.focus(); w.print(); }, 350);
+    toast(CB.periodLabel(d.run.period) + ' \u2014 ' + S.projects.length + ' brand owner(s)', 'ok');
+  }).catch(function (e) { err(e); toast(e.message, 'bad'); });
+}
+
+/* ------------------------------------------------------- payout run */
+/* Built by calc.js for the same reason the statement is: a second copy of the
+ * markup here is a second thing to remember when the document changes. And
+ * built before the window opens, because it can refuse - an unset account code
+ * stops it - and a pop-up onto a blank page is the worst way to learn that. */
+function printPayoutRun() {
+  var S = ST.settlement;
+  if (!S || !S.projects.length) { toast('Nothing to pay out yet', 'warn'); return; }
+  var doc;
+  try { doc = CB.payoutRunDoc(S, ST.cfg); }
+  catch (e) { err(e); toast(e.message, 'bad'); return; }
+  var w = window.open('', '_blank');
+  if (!w) { toast('Pop-up blocked \u2014 allow pop-ups for this page, then try again', 'bad'); return; }
   w.document.write(doc);
   w.document.close();
   setTimeout(function () { w.focus(); w.print(); }, 350);
@@ -5209,28 +5305,24 @@ var CFG_FIELDS = {
       + 'Leave this blank when the MyInvois classification below is in use, or a line would carry '
       + 'three and Xero would reject it', 'text'],
     ['trackingBy2', 'Tag the second by', 'Only used when a second category is named', 'choice',
-      [['pharmacy', 'Pharmacy'], ['brandOwner', 'Brand owner']]],
+      [['pharmacy', 'Pharmacy'], ['brandOwner', 'Brand owner']]]
+  ],
 
-    /* The MyInvois classification. Xero holds no e-Invoice field of its own -
-       neither the invoice nor the line item has one - so the connector that
-       submits to IRBM reads the code off a tracking category it creates.
-       Unlike the two above, the code is decided by what the DOCUMENT IS: the
-       same brand owner and the same pharmacy appear on all three with three
-       different codes. Hence three settings, not another "tag by".
-       Typed rather than chosen from a list: there are forty-five codes and they
-       belong to Xero, not to this application. A wrong one is refused before
-       anything is created, with what Xero does have in the message. */
-    ['myinvoisCategory', 'MyInvois classification category', 'The tracking category the e-Invoice '
-      + 'connector created in Xero &mdash; usually <span class="mono">MyInvois Classification</span>. '
-      + 'Blank turns all of this off', 'text'],
-    ['myinvoisSales', 'Code for a pharmacy invoice', 'What this document is: the platform '
-      + 'invoicing the buyer for the brand owner. Must match the Xero option exactly, e.g. '
-      + '<span class="mono">008 - e-Commerce - e-Invoice to buyer / purchaser</span>', 'text'],
-    ['myinvoisPayout', 'Code for a payout bill', 'The platform self-billing the brand owner for '
-      + 'what it collected, e.g. <span class="mono">009 - e-Commerce - Self-billed e-Invoice to '
-      + 'seller, logistics, etc.</span>', 'text'],
-    ['myinvoisFee', 'Code for a fee invoice', 'CTG4U&rsquo;s own service, billed to the brand '
-      + 'owner, e.g. <span class="mono">022 - Others</span>', 'text']
+  /* Its own card, because the tracking card is about a brand owner's activity
+     reporting separately inside Xero and these four decide what is submitted to
+     IRBM. Mixed in with it, nobody looking for them had a reason to look there
+     and nobody reading that card knew what the last four fields did. */
+  myinvois: [
+    ['myinvoisCategory', 'Classification category', 'The tracking category the e-Invoice connector '
+      + 'created in Xero &mdash; usually <span class="mono">MyInvois Classification</span>. Blank '
+      + 'turns all of this off', 'text'],
+    ['myinvoisSales', 'Pharmacy invoice', 'The platform invoicing the buyer for the brand owner, '
+      + 'e.g. <span class="mono">008 - e-Commerce - e-Invoice to buyer / purchaser</span>', 'text'],
+    ['myinvoisPayout', 'Payout bill', 'The platform self-billing the brand owner for what it '
+      + 'collected, e.g. <span class="mono">009 - e-Commerce - Self-billed e-Invoice to seller, '
+      + 'logistics, etc.</span>', 'text'],
+    ['myinvoisFee', 'Fee invoice', 'CTG4U&rsquo;s own service, billed to the brand owner, e.g. '
+      + '<span class="mono">022 - Others</span>', 'text']
   ]
 };
 function renderCfg() {
@@ -5260,7 +5352,8 @@ function renderCfg() {
   };
   mk('#cfgCompany', CFG_FIELDS.company);
   mk('#cfgTerms', CFG_FIELDS.terms); mk('#cfgXero', CFG_FIELDS.xero);
-  mk('#cfgTrack', CFG_FIELDS.tracking); mk('#cfgNum', CFG_FIELDS.num);
+  mk('#cfgTrack', CFG_FIELDS.tracking); mk('#cfgMyInvois', CFG_FIELDS.myinvois);
+  mk('#cfgNum', CFG_FIELDS.num);
   renderRateWarnings();
 }
 
@@ -5834,6 +5927,10 @@ function renderRuns() {
         '<td class="num"><b>' + (t.payout != null ? M(t.payout) : '-') + '</b></td>' +
         '<td class="mut">' + esc(String(r.created_at || '').slice(0, 16).replace('T', ' ')) + '</td>' +
         '<td><button class="btn sm ghost" onclick="showRun(\'' + r.id + '\')">Documents</button>' +
+        ' <button class="btn sm ghost" onclick="reprint(\'' + r.id + '\',\'statements\')">' +
+        '\u{1F5A8} Statements</button>' +
+        ' <button class="btn sm ghost" onclick="reprint(\'' + r.id + '\',\'payout\')">' +
+        '\u{1F5A8} Payout run</button>' +
         (r.status === 'final' && CAN_WRITE
           ? ' <button class="btn sm ghost" onclick="voidRun(\'' + r.id + '\')">Void</button>' : '') +
         '</td></tr>';

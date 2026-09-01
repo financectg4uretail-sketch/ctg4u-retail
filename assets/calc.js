@@ -1991,6 +1991,29 @@
 
   var SPLIT_LINES = new RegExp('[' + String.fromCharCode(13, 10) + ']+');
 
+  /* The payout run is read across a desk and paid from, so it is plainer than
+     the statement: no letterhead, wide columns, and the figure to transfer in
+     the heaviest thing on the page. */
+  var PAYOUT_CSS = [
+    'body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#16202b;margin:24px;max-width:1080px}',
+    'h1{font-size:19px;margin:0 0 3px}',
+    '.sub{color:#6b7784;margin-bottom:16px}',
+    'table{border-collapse:collapse;width:100%}',
+    'th{text-align:left;border-bottom:2px solid #16202b;padding:7px 8px;font-size:10.5px;',
+    'text-transform:uppercase;letter-spacing:.05em;color:#6b7784}',
+    'td{border-bottom:1px solid #d7dee5;padding:7px 8px;vertical-align:top}',
+    '.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}',
+    '.mono{font-family:Consolas,monospace;font-size:11px}',
+    '.mut{color:#6b7784;font-size:11px}',
+    '.pay{font-weight:700}',
+    'tr.gap td{background:#fff4d6}',
+    '.warn{color:#7a5300;font-weight:700}',
+    'tfoot td{border-top:2px solid #16202b;border-bottom:none;padding:10px 8px;font-weight:700}',
+    'tfoot .pay{font-size:15px}',
+    '.note{color:#6b7784;font-size:11px;margin-top:14px;border-top:1px solid #d7dee5;padding-top:10px}',
+    '@media print{body{margin:0;padding:10mm}@page{size:A4 landscape;margin:0}}'
+  ].join('');
+
   var STMT_CSS = [
     'body{font:12px/1.55 "Public Sans","Segoe UI",Arial,sans-serif;color:#1b2733;margin:0;background:#f4f7f9}',
     '.stmt{background:#fff;max-width:760px;margin:0 auto 24px;padding:34px 40px;page-break-after:always}',
@@ -2252,8 +2275,7 @@
    * caller opens a window, so it has to be given the chance to not open one. */
   function statementDoc(settlement, c, only) {
     c = cfg(c);
-    xeroServiceInvoices(settlement, c);
-    xeroPayoutBills(settlement, c);
+    stampNumbers(settlement, c);
     /* `only` is an index, which is what the dropdown on the Outputs tab has.
        A brand-owner CODE is the other thing a caller naturally reaches for, and
        passing one used to produce a perfectly valid blank document - a silent
@@ -2273,6 +2295,188 @@
     return '<!doctype html><html><head><meta charset="utf-8"><title>Consignment Settlement ' +
       esc(periodLabel(c.period)) + '</title><style>' + STMT_CSS + '</style></head><body>' +
       show.map(function (P) { return statementHTML(P, c); }).join('') +
+      '</body></html>';
+  }
+
+  /* Document numbers, unless the month already has them.
+   *
+   * Both documents are built by asking the Xero builders to run, which stamps a
+   * fee invoice and payout bill number onto each project as a side effect. That
+   * is right for a month being prepared. It is wrong for one being reprinted:
+   * the numbers are already issued, they are on invoices in Xero, and a rebuild
+   * starting from one would quote numbers that belong to other documents -
+   * which a reader has no way to tell from the right ones. */
+  function stampNumbers(settlement, c) {
+    /* The account codes are checked either way. Skipping the numbering must not
+       quietly skip the refusal that goes with it: a statement for a month whose
+       Xero output cannot be built is a statement of figures nobody can invoice,
+       and that is true whether the month is being prepared or reprinted. Only
+       the numbering is conditional. */
+    requireAccounts(c, ['acctPassThrough', 'acctMgmtIncome', 'acctServiceIncome']);
+    var already = settlement.projects.length && settlement.projects.every(function (P) {
+      return P.serviceInvoiceNumber && P.payoutBillNumber;
+    });
+    if (already) return;
+    xeroServiceInvoices(settlement, c);
+    xeroPayoutBills(settlement, c);
+  }
+
+  /* A finalised month's settlement, rebuilt from what was stored.
+   *
+   * Figures come from the stored settlement rows and are never recomputed: they
+   * were agreed when the month was finalised and they are on documents in Xero.
+   * The document numbers come from there too, so a reprint quotes the numbers
+   * that are really on the invoices rather than renumbering from one.
+   *
+   * The per-pharmacy items are the exception, because by_pharmacy was stored
+   * without them. They are rebuilt by collapseItems - the same function that
+   * built them originally, from the same lines - and then checked against the
+   * stored per-pharmacy figures. A rebuild that disagrees is not printed: a
+   * statement short by one product reads exactly like a correct one.
+   */
+  function settlementFromRun(stored, lines, c) {
+    c = cfg(c);
+    var byProject = {};
+    collapseItems(lines || [], c).forEach(function (I) {
+      var pc = I.project.code || I.project.name;
+      var ph = I.pharmacy.code || I.pharmacy.trading;
+      var P = byProject[pc] || (byProject[pc] = { map: {}, order: [], lines: [] });
+      if (!P.map[ph]) { P.map[ph] = { pharmacy: I.pharmacy, items: [], gross: 0, net: 0 }; P.order.push(ph); }
+      var B = P.map[ph];
+      B.items.push(I);
+      B.gross = r2(B.gross + I.gross);
+      B.net = r2(B.net + I.net);
+      P.lines = P.lines.concat(I.lines || []);
+    });
+
+    var problems = [];
+    var projects = (stored || []).map(function (row) {
+      var code = row.code;
+      var built = byProject[code] || { map: {}, order: [], lines: [] };
+      var storedBy = row.byPharmacy || [];
+      var storedByCode = {};
+      storedBy.forEach(function (b) { storedByCode[b.code || b.trading] = b; });
+
+      var byPharmacy = built.order.map(function (ph) {
+        var B = built.map[ph];
+        var s = storedByCode[ph];
+        if (!s) {
+          problems.push(code + ': ' + ph + ' is in the lines and not in the stored settlement');
+        } else {
+          if (r2(s.gross) !== B.gross) {
+            problems.push(code + ' ' + ph + ': rebuilt gross ' + B.gross + ', stored ' + r2(s.gross));
+          }
+          if (r2(s.net) !== B.net) {
+            problems.push(code + ' ' + ph + ': rebuilt net ' + B.net + ', stored ' + r2(s.net));
+          }
+        }
+        return {
+          pharmacy: B.pharmacy, items: B.items, gross: B.gross, net: B.net,
+          discount: r2(B.gross - B.net),
+          mgmtFee: s ? num(s.mgmtFee) : num(c.mgmtFeePerPharmacy)
+        };
+      });
+      storedBy.forEach(function (b) {
+        var k = b.code || b.trading;
+        if (!built.map[k]) {
+          problems.push(code + ': ' + k + ' is in the stored settlement and not in the lines');
+        }
+      });
+
+      /* A brand owner's totals are the sum of its pharmacies' - true of every
+         row of the August run, and the one thing that says a stored settlement
+         still agrees with its own breakdown. A row that has drifted from it is
+         not a row to print a statement from. */
+      var sumGross = r2(storedBy.reduce(function (t, b) { return t + num(b.gross); }, 0));
+      var sumNet = r2(storedBy.reduce(function (t, b) { return t + num(b.net); }, 0));
+      if (storedBy.length && sumGross !== r2(num(row.salesAmount))) {
+        problems.push(code + ': stored sales ' + r2(num(row.salesAmount)) +
+          ' but its pharmacies sum to ' + sumGross);
+      }
+      if (storedBy.length && sumNet !== r2(num(row.netSales))) {
+        problems.push(code + ': stored net sales ' + r2(num(row.netSales)) +
+          ' but its pharmacies sum to ' + sumNet);
+      }
+
+      return {
+        project: row.project, code: code, lines: built.lines, byPharmacy: byPharmacy,
+        pharmacyCount: num(row.pharmacyCount), salesAmount: r2(num(row.salesAmount)),
+        discount: r2(num(row.discount)), netSales: r2(num(row.netSales)),
+        mgmtFee: r2(num(row.mgmtFee)), serviceFee: r2(num(row.serviceFee)),
+        insuranceFee: r2(num(row.insuranceFee)), sst: r2(num(row.sst)),
+        sstBase: r2(num(row.mgmtFee) + num(row.serviceFee) + num(row.insuranceFee)),
+        feesTotal: r2(num(row.mgmtFee) + num(row.serviceFee) + num(row.insuranceFee) + num(row.sst)),
+        totalPayout: r2(num(row.totalPayout)),
+        serviceInvoiceNumber: row.serviceInvoiceNumber || '',
+        payoutBillNumber: row.payoutBillNumber || ''
+      };
+    });
+
+    if (problems.length) {
+      throw new Error('This month cannot be rebuilt from what was stored - ' +
+        problems.length + ' disagreement(s), first: ' + problems[0]);
+    }
+    return { projects: projects, unmapped: [], rebuilt: true };
+  }
+
+  /* One page saying who to pay, how much, and into which account.
+   *
+   * The figures exist on the Summary sheet of the working file, but that is an
+   * audit document: no bank details, and the payout arrives as a number with no
+   * working. Here the subtraction is printed, because it is the question anybody
+   * checking the page has - the brand owner is owed the bill in full and is
+   * separately invoiced the fees, and the transfer is the difference.
+   *
+   * The document numbers come from the same builders the statement uses, so a
+   * payout run quotes the numbers that are really on the documents. */
+  function payoutRunDoc(settlement, c) {
+    c = cfg(c);
+    stampNumbers(settlement, c);
+
+    var d = dates(c);
+    var rows = settlement.projects.map(function (P) {
+      var p = P.project || {};
+      var fees = r2(P.mgmtFee + P.serviceFee + P.insuranceFee + P.sst);
+      var bank = [p.bankName, p.bankAccountName, p.bankAccountNo]
+        .map(function (x) { return String(x == null ? '' : x).trim(); });
+      var missing = bank.some(function (x) { return !x; });
+      return '<tr' + (missing ? ' class="gap"' : '') + '>' +
+        '<td><b>' + esc(p.name || P.code) + '</b>' +
+        (p.xeroContact && p.xeroContact !== p.name
+          ? '<div class="mut">' + esc(p.xeroContact) + '</div>' : '') + '</td>' +
+        '<td class="mono">' + esc(P.payoutBillNumber || '') + '</td>' +
+        '<td class="num">' + money(P.netSales) + '</td>' +
+        '<td class="mono">' + esc(P.serviceInvoiceNumber || '') + '</td>' +
+        '<td class="num">&minus;' + money(fees) + '</td>' +
+        '<td class="num pay">' + money(P.totalPayout) + '</td>' +
+        '<td>' + (missing
+          ? '<span class="warn">bank details missing</span>'
+          : esc(bank[0]) + '<div class="mut">' + esc(bank[1]) + '</div>' +
+            '<div class="mono">' + esc(bank[2]) + '</div>') + '</td></tr>';
+    }).join('');
+
+    var tBill = sumMoney(settlement.projects, function (p) { return p.netSales; });
+    var tFee = sumMoney(settlement.projects, function (p) {
+      return r2(p.mgmtFee + p.serviceFee + p.insuranceFee + p.sst);
+    });
+    var tPay = sumMoney(settlement.projects, function (p) { return p.totalPayout; });
+
+    return '<!doctype html><html><head><meta charset="utf-8"><title>Payout run ' +
+      esc(periodLabel(c.period)) + '</title><style>' + PAYOUT_CSS + '</style></head><body>' +
+      '<h1>Payout run &mdash; ' + esc(periodLabel(c.period)) + '</h1>' +
+      '<div class="sub">' + esc(c.coName || '') + ' &nbsp;&middot;&nbsp; ' +
+      settlement.projects.length + ' brand owner(s) &nbsp;&middot;&nbsp; prepared ' +
+      esc(dmy(d.idate)) + '</div>' +
+      '<table><thead><tr><th>Brand owner</th><th>Payout bill</th><th class="num">Bill</th>' +
+      '<th>Fee invoice</th><th class="num">Less fees</th><th class="num">To pay</th>' +
+      '<th>Account</th></tr></thead><tbody>' + rows +
+      '</tbody><tfoot><tr><td colspan="2">Total</td>' +
+      '<td class="num">' + money(tBill) + '</td><td></td>' +
+      '<td class="num">&minus;' + money(tFee) + '</td>' +
+      '<td class="num pay">' + money(tPay) + '</td><td></td></tr></tfoot></table>' +
+      '<p class="note">Each brand owner is owed the payout bill in full and is separately ' +
+      'invoiced the fees. The transfer is the difference, so in Xero the two documents are ' +
+      'offset against the same contact rather than the bill being paid in full.</p>' +
       '</body></html>';
   }
 
@@ -3647,6 +3851,7 @@
     monthEnd: monthEnd,
     monthStart: monthStart, addDays: addDays, dmy: dmy, periodLabel: periodLabel, periodYYMM: periodYYMM,
     periodPhrase: periodPhrase, docReference: docReference,
+    payoutRunDoc: payoutRunDoc, settlementFromRun: settlementFromRun,
     feeChargeLabel: feeChargeLabel,
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
