@@ -204,19 +204,44 @@
         .eq('id', id).then(function (r) { fail('Update user', r.error); return true; });
     },
 
+    /* Every row of a query, however many there are.
+     *
+     * PostgREST caps a plain select at a thousand and returns them without a
+     * word about the rest, so a list that grows past it starts arriving
+     * silently short. Pages until a page comes back smaller than the page size,
+     * which is the only answer that means "that was the last of them".
+     *
+     * `build` is called with the range and must return a fresh query each time:
+     * a Supabase query builder is single-use, and reusing one gets the same
+     * page over and over. */
+    pageAll: function (label, build) {
+      var PAGE = 1000;
+      var all = [];
+      var page = function (from) {
+        return build(from, from + PAGE - 1).then(function (r) {
+          var got = rows(r, label);
+          all = all.concat(got);
+          return got.length < PAGE ? all : page(from + PAGE);
+        });
+      };
+      return page(0);
+    },
+
     /* -------------------------------------------------------- master data */
 
     /* Returns the exact shape calc.js wants: pharmacies / projects / products,
      * with products.project holding the brand owner CODE. */
     loadMaster: function () {
       return Promise.all([
-        sb.from('pharmacies').select('*').order('code'),
+        DB.pageAll('Load pharmacies', function (a, b) {
+          return sb.from('pharmacies').select('*').order('code').range(a, b); }),
         sb.from('brand_owners').select('*').order('code'),
-        sb.from('products').select('*, brand_owners(code)').order('name')
+        DB.pageAll('Load products', function (a, b) {
+          return sb.from('products').select('*, brand_owners(code)').order('name').range(a, b); })
       ]).then(function (r) {
-        var ph = rows(r[0], 'Load pharmacies');
+        var ph = r[0];
         var bo = rows(r[1], 'Load brand owners');
-        var pr = rows(r[2], 'Load products');
+        var pr = r[2];
         return {
           pharmacies: ph.map(function (p) {
             return {
@@ -438,16 +463,19 @@
         sb.from('run_settlements').select(
           '*, brand_owners(code,name,xero_contact,email,brn,tax_no,address,phone,' +
           'bank_name,bank_account_name,bank_account_no)').eq('run_id', id),
-        sb.from('documents').select('*').eq('run_id', id).order('number'),
-        sb.from('run_lines').select(
-          '*, pharmacies(code,trading,contact), brand_owners(code,name,xero_contact)')
-          .eq('run_id', id).order('id')
+        DB.pageAll('Load documents', function (a, b) {
+          return sb.from('documents').select('*').eq('run_id', id).order('number').range(a, b); }),
+        /* 1,445 lines in one month, and this used to stop at a thousand. */
+        DB.pageAll('Load run lines', function (a, b) {
+          return sb.from('run_lines').select(
+            '*, pharmacies(code,trading,contact), brand_owners(code,name,xero_contact)')
+            .eq('run_id', id).order('id').range(a, b); })
       ]).then(function (r) {
         return {
           run: one(r[0], 'Load run'),
           settlements: rows(r[1], 'Load settlements'),
-          documents: rows(r[2], 'Load documents'),
-          lines: rows(r[3], 'Load run lines')
+          documents: r[2],
+          lines: r[3]
         };
       });
     },
@@ -456,9 +484,10 @@
     periodStatus: function (period) {
       return Promise.all([
         sb.from('runs').select('id,status,created_at,totals').eq('period', period),
-        sb.from('documents').select('doc_type,number').eq('period', period).limit(1000)
+        DB.pageAll('Load period documents', function (a, b) {
+          return sb.from('documents').select('doc_type,number').eq('period', period).range(a, b); })
       ]).then(function (r) {
-        var rs = rows(r[0], 'Check period'), docs = rows(r[1], 'Check documents');
+        var rs = rows(r[0], 'Check period'), docs = r[1];
         return {
           runs: rs,
           finalised: rs.some(function (x) { return x.status === 'final'; }),
