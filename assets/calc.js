@@ -827,11 +827,45 @@
    * In the description because that is the field that always prints. The
    * tracking category already carries the brand owner and never reaches the
    * pharmacy's copy. */
-  function supplierPrefix(item, c) {
-    if (!cfg(c).nameSupplierOnLine) return '';
+  function supplierName(item) {
     var p = item && item.project;
     var who = p ? (p.xeroContact || p.name || p.code || '') : '';
-    return who ? (String(who).trim() + ' \u2014 ') : '';
+    return who ? String(who).trim() : '';
+  }
+
+  function supplierPrefix(item, c) {
+    if (!cfg(c).nameSupplierOnLine) return '';
+    var who = supplierName(item);
+    return who ? (who + ' \u2014 ') : '';
+  }
+
+  /* The order the lines are printed in.
+   *
+   * They used to arrive in the order the source sheets were read, so one
+   * supplier's goods were scattered down an invoice carrying five others'.
+   * Grouped by the name that actually prints, not by the brand owner code, so
+   * three brands sharing one Xero contact read as one company - which is what
+   * the pharmacy and that company both see.
+   *
+   * Byte comparison on the upper-cased text, never localeCompare: this same
+   * rule is written again in index.ts, and the browser and Deno must not be
+   * free to sort the same invoice two ways. A test holds the two bodies
+   * identical. Price last so the order is total and a reprint cannot shuffle
+   * two lines that tie. */
+  function lineOrder(a, b) {
+    var A = String(a.supplier || '').toUpperCase();
+    var B = String(b.supplier || '').toUpperCase();
+    if (A !== B) return A < B ? -1 : 1;
+    var P = String(a.desc || '').toUpperCase();
+    var Q = String(b.desc || '').toUpperCase();
+    if (P !== Q) return P < Q ? -1 : 1;
+    if (a.price !== b.price) return a.price - b.price;
+    return 0;
+  }
+
+  function lineSortKey(item) {
+    return { supplier: supplierName(item), desc: String(item.description || ''),
+             price: num(item.unitPrice) };
   }
 
   function invoiceShape(item, c) {
@@ -939,6 +973,13 @@
       var k = I.pharmacy.code || I.pharmacy.trading;
       if (!map[k]) { map[k] = { pharmacy: I.pharmacy, items: [] }; order.push(k); }
       map[k].items.push(I);
+    });
+    /* Company by company. Only the printing changes - every figure is computed
+       per item and none of them depends on the order. Sorted here rather than
+       in collapseItems, which also feeds the settlement, where the order
+       decides which brand owner is numbered first. */
+    order.forEach(function (k) {
+      map[k].items.sort(function (x, y) { return lineOrder(lineSortKey(x), lineSortKey(y)); });
     });
 
     return order.map(function (k) {
@@ -3866,7 +3907,7 @@
     xeroPayoutBills: xeroPayoutBills, toCSV: toCSV, invNo: invNo,
     detectColumns: detectColumns,
     requireAccounts: requireAccounts,
-    collapseItems: collapseItems,
+    collapseItems: collapseItems, lineOrder: lineOrder, lineSortKey: lineSortKey,
     invoiceShape: invoiceShape, findHeaderRow: findHeaderRow, looksDate: looksDate, looksNum: looksNum,
     componentMovement: componentMovement, stockCrossCheck: stockCrossCheck,
     packageGiveawayLines: packageGiveawayLines,
