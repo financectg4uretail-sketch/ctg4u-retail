@@ -360,6 +360,15 @@ tr:hover td{background:var(--surface-2)}
    every number. Both the stock table and the movement report were already
    setting this class on such a row; nothing had ever styled it, so the one row
    that matters looked exactly like the rest. */
+/* A row worth a second look, short of being wrong. The fee-base table marks a
+   brand owner charged on fewer open shops than had sales - a shop cannot sell
+   while shut, so it is either a stale count or three shops that closed mid
+   period, and only the operator can say which. Styled at the same time as the
+   class was introduced: the note below records what happens when it is not. */
+tr.warn td{background:var(--warn-bg);color:var(--warn-tx)}
+tr.warn:hover td{background:#f6e6cc}
+tr.warn td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+tr.warn td.num{color:var(--warn-tx);font-weight:600}
 tr.bad td{background:var(--bad-bg);color:var(--bad-tx)}
 tr.bad:hover td{background:#f6dcdc}
 tr.bad td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
@@ -604,6 +613,25 @@ body.readonly input,body.readonly select,body.readonly textarea{pointer-events:n
   border-bottom:1px solid var(--rule);
 }
 .card>h2+.hint{margin-top:-6px}
+
+/* The same band, for a card whose title shares its row with buttons.
+ *
+ * `.card>h2` is a direct-child rule, so a heading wrapped in a header row fell
+ * through it to the browser's default - 21px, unbanded, next to a 14.5px banded
+ * title on the same screen. Three cards were built that way and all three read
+ * as though they belonged to a different application.
+ *
+ * The row takes the band because the row is what spans the card; the heading
+ * inside it takes the typography. Marked with a class rather than matched with
+ * :has(), so what is happening is legible at the call site. */
+.card>.hdrow{
+  margin:-2px calc(var(--cardpad) * -1) 14px;padding:0 var(--cardpad) 13px;
+  border-bottom:1px solid var(--rule);
+}
+.card>.hdrow h2{
+  font-size:14.5px;font-weight:600;letter-spacing:-.008em;margin:0;
+}
+.card>.hdrow+.hint{margin-top:-6px}
 
 /* ------------------------------------------------- business-overview cards */
 

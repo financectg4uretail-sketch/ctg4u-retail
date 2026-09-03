@@ -268,6 +268,12 @@
               brn: b.brn || '', taxNo: b.tax_no || '',
               xeroSyncedAt: b.xero_synced_at || null,
               xeroContactId: b.xero_contact_id || '',
+              /* This company's own terms, where they differ from the house
+                 rates in Settings. Null stays null rather than becoming 0 or
+                 '': the resolver reads absence as "use the house rate", and a
+                 zero would charge this brand owner nothing. */
+              serviceFeePct: b.service_fee_pct == null ? null : Number(b.service_fee_pct),
+              mgmtFeePerStore: b.mgmt_fee_per_store == null ? null : Number(b.mgmt_fee_per_store),
               /* what the pharmacies call this brand on their own sheets */
               aliases: b.aliases || [],
               trackingOption: b.tracking_option || '', active: b.active
@@ -366,6 +372,17 @@
         bankAccountNo: ['bank_account_no', 'blank'],
         address: ['address', 'blank'], phone: ['phone', 'blank'],
         brn: ['brn', 'blank'], taxNo: ['tax_no', 'blank']
+      });
+      /* Sent only when the caller actually said something, so a screen that
+         does not know about fee terms cannot silently clear them - the shape of
+         bug that wiped a month of payroll rates once already. Empty means "back
+         to the house rate", which is a real instruction and is stored as null,
+         not as zero. */
+      ['serviceFeePct', 'mgmtFeePerStore'].forEach(function (k) {
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return;
+        var col = k === 'serviceFeePct' ? 'service_fee_pct' : 'mgmt_fee_per_store';
+        var v = b[k];
+        row[col] = (v === '' || v == null || !isFinite(Number(v))) ? null : Number(v);
       });
       if (Object.prototype.hasOwnProperty.call(b, 'active')) row.active = b.active !== false;
       row.updated_at = new Date().toISOString();
@@ -780,6 +797,75 @@
        * skipped by the server, not re-sent. */
       post: function (runId) {
         return DB.xero.call('post', { method: 'POST', body: { runId: runId } });
+      },
+
+      /* What Xero holds against each brand owner, shaped for settlementAudit.
+       *
+       * The pre-send check can prove a statement adds up on its own without
+       * ever leaving the browser. What it cannot do alone is say whether the
+       * books agree - and in August every real difference was of that kind: a
+       * payout bill settling a different figure from the statement citing it,
+       * a fee invoice charging something other than the fees deducted. Those
+       * were found one brand owner at a time, by hand, the night before the
+       * statements went out.
+       *
+       * Folded from two actions that already exist rather than a new one:
+       * `projectsplit` reads the pharmacy invoices back and sums them by the
+       * PROJECT tag each line carries, and `compare` reads every document's
+       * total. Both are read-only; nothing here writes to Xero.
+       *
+       * `projects` is [{ code, trackingOption, feeNo, billNo }] - the tag is how
+       * Xero knows a brand owner, and the two numbers are what the statement
+       * will quote.
+       */
+      auditData: function (runId, projects) {
+        projects = projects || [];
+        return Promise.all([
+          DB.xero.call('projectsplit', { method: 'POST', body: { runId: runId } }),
+          DB.xero.call('compare', { method: 'POST', body: { runId: runId } })
+        ]).then(function (r) {
+          var split = r[0], cmp = r[1];
+
+          /* invoice totals by number, from whichever record compare settled on */
+          var docTotal = {};
+          (cmp.documents || cmp.rows || []).forEach(function (d) {
+            if (d && d.number != null) docTotal[String(d.number)] = d.xeroTotal;
+          });
+          (cmp.differ || []).forEach(function (d) {
+            if (d && d.number != null) docTotal[String(d.number)] = d.xeroTotal;
+          });
+
+          /* the pharmacy invoices, summed by the tag they carry */
+          var byTag = {};
+          Object.keys(split.byInvoice || {}).forEach(function (no) {
+            var inv = split.byInvoice[no] || {};
+            Object.keys(inv.split || {}).forEach(function (tag) {
+              var p = inv.split[tag];
+              var t = byTag[tag] || (byTag[tag] = { gross: 0, net: 0, lines: 0 });
+              t.gross += Number(p.gross || 0);
+              t.net += Number(p.net || 0);
+              t.lines += Number(p.lines || 0);
+            });
+          });
+
+          var out = {};
+          projects.forEach(function (P) {
+            var tag = byTag[P.trackingOption] || byTag[P.code] || null;
+            var row = {};
+            if (tag) {
+              row.gross = Math.round(tag.gross * 100) / 100;
+              row.net = Math.round(tag.net * 100) / 100;
+            }
+            /* Only what Xero actually answered for. A number absent from the
+               books is left undefined rather than sent as zero - the check
+               reads a zero as a real disagreement and would report every
+               unposted month as broken. */
+            if (P.feeNo && docTotal[P.feeNo] != null) row.feeTotal = docTotal[P.feeNo];
+            if (P.billNo && docTotal[P.billNo] != null) row.billTotal = docTotal[P.billNo];
+            if (Object.keys(row).length) out[P.code] = row;
+          });
+          return out;
+        });
       }
     },
 

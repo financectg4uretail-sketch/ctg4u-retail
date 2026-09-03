@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=cc1604795f">
+<link rel="stylesheet" href="assets/app.css?v=7382fe49a9">
 <style>
 /* the access gate is the only rule this page needs beyond the shared stylesheet */
 #gate{position:fixed;inset:0;background:var(--canvas);display:grid;place-items:center;z-index:200;text-align:center}
@@ -334,8 +334,8 @@
 
 <script src="assets/supabase.min.js?v=a38f466463"></script>
 <script src="assets/config.js?v=8e9d0c7c63"></script>
-<script src="assets/db.js?v=03acf6c068"></script>
-<script src="assets/calc.js?v=e9e8ea34f2"></script>
+<script src="assets/db.js?v=55fc14fe33"></script>
+<script src="assets/calc.js?v=e31bc2badf"></script>
 <script src="assets/my-map.js?v=fcc0ae8679"></script>
 <script>
 'use strict';
@@ -356,7 +356,7 @@
  * seeing yesterday's page. So the attempt is recorded in sessionStorage before
  * navigating, and a failure to fetch is simply ignored: offline is not stale. */
 (function () {
-  var MINE = '4d0018203cdd';
+  var MINE = 'b26800f272e4';
   if (MINE.indexOf('__') === 0) return;            // running from source, not a build
   try { if (sessionStorage.getItem('build-reloaded') === MINE) return; } catch (e) { return; }
   fetch('version.json', { cache: 'no-store' })
@@ -2437,6 +2437,10 @@ function recompute(raw) {
   // Same predicate on both sides — see CB.isBillable. Never filter here.
   ST.billing = CB.buildPharmacyBilling(ST.lines, ST.cfg);
   ST.check = CB.crossCheck(ST.billing, ST.settlement);
+  /* Anything read from Xero described the month as it was a moment ago. Rebuilt,
+     it no longer does, and a stale comparison is worse than none - it reports
+     agreement with figures that have moved. */
+  ST.xeroAudit = null;
   renderSteps();
 }
 
@@ -4015,8 +4019,10 @@ function renderSettle() {
   h += ckBanner();
   h += '</div>';
 
+  h += feeBasesCard(S, c);
+
   S.projects.forEach(function (P, i) {
-    h += '<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start">' +
+    h += '<div class="card"><div class="row hdrow" style="justify-content:space-between;align-items:flex-start">' +
       '<div><h2>' + esc(P.project.name) + '</h2><div class="mut">' + esc(P.code) + ' · ' +
       P.pharmacyCount + ' pharmacy(s) · ' + P.lines.length + ' line(s)</div></div>' +
       '<button class="btn sm ghost" onclick="printStatement(' + i + ')">🖨 Statement</button></div>' +
@@ -4046,6 +4052,266 @@ function renderSettle() {
 
   host.innerHTML = h;
 }
+/* --------------------------------------------------------- before sending --
+ *
+ * Every sum on every statement, recomputed from its parts and shown before a
+ * single document leaves. August's statements were audited this way by a script
+ * written the night they went out; it found a management fee charged on fewer
+ * shops than had sales and two payouts that came out negative, and then it was
+ * thrown away with the scratchpad it lived in.
+ *
+ * Two lists, because they are two decisions. What must be fixed is not the same
+ * as what somebody has to look at and approve, and a screen that mixes them
+ * teaches the reader to skim both.
+ */
+function auditCard() {
+  var a;
+  try {
+    a = CB.settlementAudit(ST.settlement, ST.billing, ST.cfg, ST.xeroAudit || null);
+  } catch (e) {
+    return '<div class="card"><h2>Before you send</h2>' +
+      '<div class="note bad">The check could not run: ' + esc(e.message) + '</div></div>';
+  }
+  var stops = a.findings.filter(function (f) { return f.severity === 'stop'; });
+  var looks = a.findings.filter(function (f) { return f.severity === 'look'; });
+
+  var list = function (rows, cls) {
+    return '<table style="margin-top:10px">' + rows.map(function (f) {
+      return '<tr class="' + cls + '"><td style="width:210px">' + esc(f.brand) +
+        (f.code ? '<div class="mut">' + esc(f.code) + '</div>' : '') +
+        '</td><td>' + esc(f.what) + '</td></tr>';
+    }).join('') + '</table>';
+  };
+
+  return '<div class="card">' +
+    '<div class="row hdrow" style="justify-content:space-between;align-items:center">' +
+    '<h2>Before you send</h2>' +
+    '<div class="row" style="gap:8px">' +
+    (ST.xeroAudit
+      ? '<span class="chip">✓ checked against Xero</span>'
+      : '') +
+    '<button class="btn sm ghost ro-only" data-xero-read ' +
+    'data-label="&#10547; Also check against Xero" onclick="auditAgainstXero(this)">' +
+    '&#10547; Also check against Xero</button>' +
+    '</div></div>' +
+    '<div class="hint">Every figure on all ' + a.checked + ' statement(s), added up again from ' +
+    'the rows behind it rather than read off the total &mdash; the pharmacy columns, the ' +
+    'discount, the three fees and the payout.' +
+    (ST.xeroAudit ? '' : ' Reading Xero as well holds each one against the invoices and the ' +
+      'payout bill that settle it &mdash; nothing is written.') + '</div>' +
+    (stops.length
+      ? '<div class="note warn" style="border-color:var(--bad);background:var(--bad-bg)">' +
+        '<b>' + stops.length + ' to fix.</b> A statement that contradicts itself, or the money ' +
+        'it settles, should not go out.</div>' + list(stops, 'bad')
+      : '<div class="note" style="border-color:var(--ok);background:#00a99d0f">' +
+        '✓ <b>All ' + a.checked + ' statement(s) add up.</b> Every column sums to its total, ' +
+        'every fee is its own rate on its own base, and the payout is what is left.</div>') +
+    (looks.length
+      ? '<div class="note" style="margin-top:12px"><b>' + looks.length + ' worth a look.</b> ' +
+        'Nothing here is wrong on its own; each one needs somebody to say it is meant.</div>' +
+        list(looks, 'warn')
+      : '') +
+    '</div>';
+}
+
+/* Read what Xero holds and check the statements against it.
+ *
+ * Read-only: two actions that only read, folded into one answer per brand
+ * owner. The result is kept on ST so the card can be re-rendered without asking
+ * Xero again, and so it is obvious on screen whether the books have been read
+ * at all - a check that silently did not run reads exactly like one that
+ * passed.
+ *
+ * Cleared whenever the run is rebuilt, because a figure held against a month
+ * that has since changed is worse than no figure. */
+function auditAgainstXero(btn) {
+  if (!ST.run || !ST.run.id) {
+    toast('Finalise the month first — there is nothing in Xero to check against yet', 'warn');
+    return;
+  }
+  var projects = ST.settlement.projects.map(function (P) {
+    return { code: P.code, trackingOption: CB.trackingOption(ST.cfg, P.project),
+             feeNo: P.serviceInvoiceNumber || '', billNo: P.payoutBillNumber || '' };
+  });
+  /* The same guard every other Xero read uses. Two reads racing over one
+     connection is how a dialog was left half-drawn and stalled for a minute. */
+  if (XERO_BUSY) { toast('A Xero read is already running - give it a moment', 'warn'); return; }
+  xeroBusy(true, btn);
+  DB.xero.auditData(ST.run.id, projects).then(function (x) {
+    ST.xeroAudit = x;
+    var n = Object.keys(x).length;
+    toast(n ? 'Read ' + n + ' brand owner(s) back from Xero' : 'Xero holds nothing for this run yet',
+      n ? 'ok' : 'warn');
+    renderOut();
+  }, function (e) {
+    toast(e.message, 'bad');
+  }).then(function () { xeroBusy(false, btn); });
+}
+
+/* ---------------------------------------------------------- fee bases ----
+ *
+ * What the two fees are charged ON, which the run cannot know by itself.
+ *
+ *   shops running - the management fee is RM75 for every shop open this period,
+ *     not for every shop that happened to sell. A shop that is open and sold
+ *     nothing still costs the brand owner RM75, and in August nineteen of the
+ *     twenty-five were charged on more shops than had sales.
+ *
+ *   sheet gross - the service fee is charged on the brand's gross for the
+ *     period from the sales sheet, which is larger than this run whenever some
+ *     of the brand's sales are settled elsewhere.
+ *
+ * Both are shown against what the run saw, so the operator is comparing rather
+ * than trusting. Empty means "use the run's own figure" - the behaviour of every
+ * month before this one - and clearing a box gets that back.
+ */
+function feeBasesCard(S, c) {
+  var bases = (c.feeBases && typeof c.feeBases === 'object') ? c.feeBases : {};
+  var used = S.projects.filter(function (P) {
+    var b = bases[P.code] || {};
+    return (b.gross != null && b.gross !== '') || (b.stores != null && b.stores !== '');
+  }).length;
+
+  var rows = S.projects.map(function (P) {
+    var b = bases[P.code] || {};
+    var soldAt = P.byPharmacy.length;
+    var g = b.gross == null || b.gross === '' ? '' : b.gross;
+    var st = b.stores == null || b.stores === '' ? '' : b.stores;
+    /* A shop cannot sell while shut, so a count below the shops that sold is
+       worth looking at rather than accepting. Zeero was billed on 29 while 32
+       had sales, and the statement said so to the brand owner in as many
+       words. */
+    var short = st !== '' && Number(st) < soldAt;
+    /* The class attribute is always written, empty when there is nothing to
+       flag, so the row's opening tag stays one unbroken literal here. Built by
+       concatenating onto a half-written tag instead, it becomes invisible to
+       the markup balance test, which counts openers by their literal text: the
+       closer is counted, the opener is not, and the one guard that catches a
+       dropped tag reports a phantom imbalance instead. */
+    return '<tr class="' + (short ? 'warn' : '') + '">' +
+      '<td>' + esc(P.project.name) + '<div class="mut">' + esc(P.code) + '</div></td>' +
+      '<td class="num mut">' + M(P.salesAmount) + '</td>' +
+      '<td class="num"><input type="number" step="0.01" min="0" style="width:130px;text-align:right" ' +
+        'onchange="feeBasesEdit(&#39;' + esc(P.code) + '&#39;,&#39;gross&#39;,this)" ' +
+        'value="' + esc(g) + '" placeholder="' + M(P.salesAmount) + '"></td>' +
+      '<td class="num mut">' + soldAt + '</td>' +
+      '<td class="num"><input type="number" step="1" min="0" style="width:80px;text-align:right" ' +
+        'onchange="feeBasesEdit(&#39;' + esc(P.code) + '&#39;,&#39;stores&#39;,this)" ' +
+        'value="' + esc(st) + '" placeholder="' + soldAt + '"></td>' +
+      '<td class="num">' + M(P.serviceFee) + '</td>' +
+      '<td class="num">' + M(P.mgmtFee) + '</td></tr>';
+  }).join('');
+
+  /* Title band, then the explanation, then the table - the same order every
+     other card on the page uses. Folding the hint into the band puts it above
+     the rule, which reads as part of the title rather than as guidance. */
+  return '<div class="card"><div class="row hdrow" style="justify-content:space-between;align-items:center">' +
+    '<h2>What the fees are charged on</h2>' +
+    '<div class="row" style="gap:8px">' +
+    '<button class="btn sm ghost" onclick="feeBasesPaste()">⎘ Paste from the sheet</button>' +
+    '<button class="btn sm ghost" onclick="feeBasesClear()">Clear all</button>' +
+    '</div></div>' +
+    '<div class="hint">The management fee is charged on the shops <b>open</b> this period and the ' +
+    'service fee on the brand&rsquo;s <b>gross on the sales sheet</b> &mdash; neither of which this ' +
+    'run can see. Leave a box empty to charge on what the run itself billed.</div>' +
+    (used ? '<div class="note">' + used + ' of ' + S.projects.length +
+      ' brand owner(s) are charged on a figure from the sheet rather than on this run.</div>' : '') +
+    '<div class="scroll" style="max-height:420px;margin-top:12px"><table>' +
+    '<tr><th>Brand owner</th><th class="num">This run billed</th><th class="num">Sheet gross</th>' +
+    '<th class="num">Shops that sold</th><th class="num">Shops open</th>' +
+    '<th class="num">Service fee</th><th class="num">Mgmt fee</th></tr>' +
+    rows + '</table></div></div>';
+}
+
+/* One edited box. Written straight into the run's own cfg, which is what gets
+   frozen with the month, so the record can always say what it charged on. */
+function feeBasesSet(code, which, value) {
+  var c = ST.cfg;
+  if (!c.feeBases || typeof c.feeBases !== 'object') c.feeBases = {};
+  var b = c.feeBases[code] || (c.feeBases[code] = {});
+  var v = String(value == null ? '' : value).trim();
+  if (v === '') delete b[which];
+  else {
+    var n = Number(v.replace(/,/g, ''));
+    if (!isFinite(n) || n < 0) { toast('“' + v + '” is not a figure the fee can be charged on', 'bad'); return false; }
+    b[which] = which === 'stores' ? Math.round(n) : CB.r2(n);
+  }
+  if (!Object.keys(b).length) delete c.feeBases[code];
+  if (!Object.keys(c.feeBases).length) c.feeBases = null;
+  return true;
+}
+
+/* One box, edited on screen. Rebuilds immediately so the fee beside it moves
+   as the operator types, rather than after some later step they might not take.
+   A refused value puts the box back to what the run is actually charging, so the
+   screen never shows a figure the settlement does not hold. */
+function feeBasesEdit(code, which, el) {
+  if (!feeBasesSet(code, which, el.value)) { renderSettle(); return; }
+  recompute();
+  renderSettle();
+}
+
+/* Paste, because twenty-five rows typed by hand is twenty-five chances to
+   transpose a digit and nothing downstream can tell a typo from a decision.
+   Takes whatever the sheet gives: name, then the numbers in any order that
+   makes sense - a gross has a decimal point or is large, a shop count does not.
+   Unmatched names are reported rather than dropped, since a brand owner silently
+   missing its base is charged on the wrong figure and looks perfectly normal. */
+function feeBasesPaste() {
+  var txt = prompt('Paste from the sales sheet: one brand owner per line, then its ' +
+    'gross and its shop count. Tabs, commas or multiple spaces all work.');
+  if (txt == null) return;
+  var S = ST.settlement;
+  var byKey = {};
+  S.projects.forEach(function (P) {
+    byKey[CB.normKey(P.code)] = P.code;
+    byKey[CB.normKey(P.project.name)] = P.code;
+  });
+
+  var got = 0, missed = [];
+  String(txt).split(/\r?\n/).forEach(function (line) {
+    if (!line.trim()) return;
+    var cells = line.split(/\t|\s{2,}|,(?=\s*[^\d])/).map(function (x) { return x.trim(); })
+      .filter(function (x) { return x !== ''; });
+    if (cells.length < 2) return;
+    var code = byKey[CB.normKey(cells[0])];
+    if (!code) { missed.push(cells[0]); return; }
+
+    var nums = cells.slice(1).map(function (x) { return x.replace(/[^\d.\-]/g, ''); })
+      .filter(function (x) { return x !== '' && isFinite(Number(x)); }).map(Number);
+    if (!nums.length) return;
+    /* The gross is the big one and the shop count the small whole one. Guessing
+       by position breaks the moment a column is inserted; guessing by shape does
+       not, and a shop count in the thousands is not a case that exists. */
+    var gross = null, stores = null;
+    nums.forEach(function (n) {
+      if (Number.isInteger(n) && n <= 500 && stores == null) stores = n;
+      else if (gross == null) gross = n;
+    });
+    if (gross == null && stores != null && nums.length === 1) { /* a count alone */ }
+    if (gross != null) feeBasesSet(code, 'gross', gross);
+    if (stores != null) feeBasesSet(code, 'stores', stores);
+    got++;
+  });
+
+  recompute();
+  go('settle');
+  if (missed.length) {
+    toast(got + ' matched, ' + missed.length + ' not recognised: ' + missed.slice(0, 3).join(', ') +
+      (missed.length > 3 ? '…' : ''), 'warn');
+  } else {
+    toast(got + ' brand owner(s) updated', 'ok');
+  }
+}
+
+function feeBasesClear() {
+  if (!confirm('Charge every fee on what this run billed, as it was before any sheet figures were entered?')) return;
+  ST.cfg.feeBases = null;
+  recompute();
+  go('settle');
+  toast('Fee bases cleared', 'ok');
+}
+
 /* The control that has to be visible on screen, not buried in a log: the money
  * invoiced to pharmacies and the money owed to brand owners are the same money. */
 function ckBanner() {
@@ -4096,6 +4362,7 @@ function renderOut() {
   var t = CB.sumMoney(S.projects, function (p) { return p.totalPayout; });
   host.innerHTML =
     '<div class="card">' + ckBanner() + '</div>' +
+    auditCard() +
     /* Everything this run is about to name in Xero, held against what Xero
        actually has, BEFORE anything is created. The connector could already
        read all of it and calc.js could already list what a run needs; neither
@@ -4428,8 +4695,14 @@ function renderProjects() {
   /* The bank columns are printed on the settlement statement, so the brand
      owner can check where the payout is going before it goes rather than
      after. A blank set is called out on the statement itself. */
+  /* The two fee columns are the terms of a contract, and until they were here
+     the seven companies not on the house rate were priced by hand in Xero every
+     month - which is how one of them came to be billed 3.8% against an agreed
+     3%. Blank means the rate in Settings, so a company on standard terms has
+     nothing to keep in step. */
   t.innerHTML = '<tr><th>Code</th><th>Brand owner name</th><th>Xero contact (must match Xero)</th>' +
     '<th>Email</th><th>Business reg. no.</th><th>Tax no.</th>' +
+    '<th class="num">Service fee %</th><th class="num">Mgmt fee / shop</th>' +
     '<th>Bank</th><th>Name in bank account</th><th>Account no.</th><th></th></tr>' +
     ST.master.projects.map(function (p, i) {
       return '<tr>' +
@@ -4437,6 +4710,8 @@ function renderProjects() {
         ed('projects', i, 'xeroContact', p.xeroContact, 'exact Xero contact') + ed('projects', i, 'email', p.email, '') +
         ed('projects', i, 'brn', p.brn, 'from Xero') +
         ed('projects', i, 'taxNo', p.taxNo, 'from Xero') +
+        edRate('projects', i, 'serviceFeePct', p.serviceFeePct, CB.r2(ST.cfg.serviceFeePct), 0.001) +
+        edRate('projects', i, 'mgmtFeePerStore', p.mgmtFeePerStore, CB.r2(ST.cfg.mgmtFeePerPharmacy), 0.01) +
         ed('projects', i, 'bankName', p.bankName, 'e.g. MAYBANK') +
         ed('projects', i, 'bankAccountName', p.bankAccountName, 'as the bank holds it') +
         ed('projects', i, 'bankAccountNo', p.bankAccountNo, '') +
@@ -4476,6 +4751,33 @@ function ed(list, i, k, v, ph) {
   return '<td><input type="text" value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') +
     '" style="width:100%" onchange="setCell(\'' + list + '\',' + i + ',\'' + k + '\',this.value)"></td>';
 }
+/* A rate, where blank is a real answer and means "the rate in Settings".
+ *
+ * The placeholder shows what blank will charge, so an operator reading the row
+ * can see the rate that applies without knowing whether this company has an
+ * override. Typed as a number so a stray letter cannot become a rate. */
+function edRate(list, i, k, v, houseRate, step) {
+  return '<td class="num"><input type="number" min="0" step="' + step + '" ' +
+    'value="' + esc(v == null || v === '' ? '' : v) + '" placeholder="' + houseRate + '" ' +
+    'style="width:100%;text-align:right" ' +
+    'onchange="setRate(\'' + list + '\',' + i + ',\'' + k + '\',this.value)"></td>';
+}
+
+/* Blank clears back to the house rate; anything else is stored as a number.
+ *
+ * Kept apart from setCell because that one stores what it is handed, and a rate
+ * held as the string '10' compares and sums differently from 10 - the screen
+ * would agree with itself and disagree with the run until the next reload. */
+function setRate(list, i, k, v) {
+  var t = String(v == null ? '' : v).trim();
+  if (t !== '' && (!isFinite(Number(t)) || Number(t) < 0)) {
+    toast('“' + t + '” is not a rate', 'bad');
+    renderProjects();
+    return;
+  }
+  setCell(list, i, k, t === '' ? null : Number(t));
+}
+
 function setCell(list, i, k, v) {
   if (!requireWrite()) return;
   var row = ST.master[list][i];

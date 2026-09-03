@@ -249,6 +249,36 @@
     discountPct: 19.20,          // pharmacy discount off gross sales
     mgmtFeePerPharmacy: 75.00,   // RM per pharmacy per brand owner per month
     serviceFeePct: 3.80,         // % of GROSS sales amount (not net)
+    /* What a brand owner is charged when its own contract says something else.
+     *
+     * The rate above is the house rate. Seven companies are not on it - 8, 10,
+     * 6, 3, 10, 2.8 and 10 per cent - and until this there was nowhere to say
+     * so, so they were priced by hand in Xero every month. One of them was
+     * billed the house rate by mistake and no check could catch it, because
+     * nothing in the system knew the agreed rate to compare against.
+     *
+     * Read off the brand owner record: project.serviceFeePct and
+     * project.mgmtFeePerStore. Absent means the house rate, which is what every
+     * month before this one used. */
+
+    /* The two bases the fees are charged on, per brand owner, for THIS period.
+     *
+     * Both changed in August and neither is derivable from the run:
+     *
+     *   stores - the management fee is charged on the shops actually open, from
+     *     the Store-Product sheet. The run only knows which shops sold, and a
+     *     shop that is open and sold nothing still costs the brand owner RM75.
+     *     Nineteen of twenty-five brand owners were charged on more shops than
+     *     had sales.
+     *
+     *   gross - the service fee is charged on the brand's gross for the period
+     *     from the sales sheet, which is more than this run billed whenever
+     *     some of the brand's sales are settled elsewhere.
+     *
+     * Keyed by brand owner code. Frozen into the run's cfg, so the month can
+     * always say what it charged on. Absent falls back to the run's own
+     * figures - shops that sold, and the gross this run billed. */
+    feeBases: null,              // { 'BO-016': { gross: 50196, stores: 29 } }
     /* Two separate facts that were one setting, which is why turning the charge
      * off also broke the check on the pharmacy's own sheet.
      *
@@ -881,6 +911,102 @@
     };
   }
 
+  /* The one place that decides what a brand owner is charged, and on what.
+   *
+   * Called by the settlement, by the fee invoice and by the statement, so the
+   * amount and the words describing it come from the same answer. They used to
+   * be derived separately - the amount from the settlement, the label from the
+   * global rate - and that is how an invoice line came to read "1%" while
+   * charging the correct 10%. Nothing on the face of the document
+   * distinguished it from a line that had charged 1%.
+   *
+   * `fallback` is what the run itself knows: the shops that sold and the gross
+   * it billed. A period that supplies neither an override nor a base gets
+   * exactly the numbers this app has always produced.
+   */
+  function feeTerms(project, c, fallback) {
+    c = cfg(c);
+    fallback = fallback || {};
+    var code = project ? (project.code || project.name) : '';
+    var bases = c.feeBases || {};
+    var b = (code && bases[code]) || {};
+
+    var pct = project && project.serviceFeePct != null && project.serviceFeePct !== ''
+      ? num(project.serviceFeePct) : num(c.serviceFeePct);
+    var per = project && project.mgmtFeePerStore != null && project.mgmtFeePerStore !== ''
+      ? num(project.mgmtFeePerStore) : num(c.mgmtFeePerPharmacy);
+
+    /* A base of zero is a real answer - a brand with no sales this period is
+       charged no service fee - so only null and '' fall through. Reading a
+       supplied 0 as "not supplied" would silently charge the fallback. */
+    var gross = b.gross != null && b.gross !== '' ? r2(num(b.gross)) : r2(num(fallback.gross));
+    var stores = b.stores != null && b.stores !== '' ? Math.round(num(b.stores))
+      : Math.round(num(fallback.stores));
+
+    return {
+      serviceFeePct: pct, mgmtFeePerStore: per,
+      serviceBase: gross, storeCount: stores,
+      /* Said out loud so a reader of the settlement can tell a brand owner why
+         its fee is not a percentage of the number printed above it. */
+      basedOnSheet: b.gross != null && b.gross !== '' && r2(num(b.gross)) !== r2(num(fallback.gross)),
+      storesFromSheet: b.stores != null && b.stores !== '' &&
+        Math.round(num(b.stores)) !== Math.round(num(fallback.stores))
+    };
+  }
+
+  /* What a settlement row says it charged, for anything printing it.
+   *
+   * A row built before fee terms existed carries none, and falls back to the
+   * global settings - which is what it was charged on, so the words stay true.
+   *
+   * The rate is then held against the amount. A row whose service fee is not
+   * its own rate on its own base is not a row to print a percentage from: the
+   * label would be a claim the figures do not support, which is precisely the
+   * failure this is here to stop. In that case the line says the amount and
+   * drops the rate rather than stating one that is wrong. */
+  function settledTerms(S, c) {
+    c = cfg(c);
+    var pct = S.serviceFeePct != null ? num(S.serviceFeePct) : num(c.serviceFeePct);
+    var per = S.mgmtFeePerStore != null ? num(S.mgmtFeePerStore) : num(c.mgmtFeePerPharmacy);
+    var fee = r2(num(S.serviceFee));
+    var sales = r2(num(S.salesAmount));
+    var base;
+
+    if (S.serviceBase != null) {
+      base = r2(num(S.serviceBase));
+    } else if (pct && r2(sales * pct / 100) !== fee) {
+      /* No base recorded, and the fee is not the rate on the Sales Amount - so
+         it was charged on something this row does not name. Every row from
+         August is this shape, and the base is recoverable: divide the fee back
+         out and see whether the rate reproduces it exactly. It did for all
+         twenty-five, because that is how the figure was arrived at.
+         Where the division does not come back clean the base is unknown, and
+         claiming one would be inventing it, so the Sales Amount stands and the
+         rate is dropped below rather than stated wrongly. */
+      var implied = r2(fee / (pct / 100));
+      base = r2(implied * pct / 100) === fee ? implied : sales;
+    } else {
+      base = sales;
+    }
+
+    var agrees = pct ? r2(base * pct / 100) === fee : fee === 0;
+    return {
+      serviceFeePct: pct, mgmtFeePerStore: r2(per), serviceBase: base,
+      agrees: agrees,
+      /* Whether the base is a figure this row RECORDED, or one worked back out
+         of the fee. The recovery is precise enough to decide whether the rate
+         can be stated - it either reproduces the fee or it does not - and not
+         precise enough to print. Zeero's fee of 1,907.45 divides back to
+         50,196.05 against a sheet that says 50,196.00: five sen of rounding,
+         printed on a document that goes to the brand owner as though it were
+         the figure they were charged on. So a recovered base is used and never
+         quoted. */
+      baseKnown: S.serviceBase != null,
+      /* A rate worth printing only when the amount bears it out. */
+      statedPct: agrees ? pct : null
+    };
+  }
+
   function buildSettlement(lines, c) {
     c = cfg(c);
     var projects = {}, order = [];
@@ -918,15 +1044,19 @@
           gross: gross,
           discount: r2(gross - net),
           net: net,
-          mgmtFee: r2(c.mgmtFeePerPharmacy)
+          mgmtFee: r2(feeTerms(P.project, c).mgmtFeePerStore)
         };
       });
 
       var salesAmount = sumMoney(byPharmacy, function (b) { return b.gross; });
       var netSales = sumMoney(byPharmacy, function (b) { return b.net; });
-      var pharmacyCount = byPharmacy.length;
-      var mgmtFee = r2(c.mgmtFeePerPharmacy * pharmacyCount);
-      var serviceFee = r2(salesAmount * c.serviceFeePct / 100);
+      /* What the run saw, which is the fallback when the period supplies no
+         base of its own: the shops that sold, and the gross this run billed. */
+      var terms = feeTerms(P.project, c,
+        { gross: salesAmount, stores: byPharmacy.length });
+      var pharmacyCount = terms.storeCount;
+      var mgmtFee = r2(terms.mgmtFeePerStore * pharmacyCount);
+      var serviceFee = r2(terms.serviceBase * terms.serviceFeePct / 100);
       var insuranceFee = c.deductInsurance
         ? r2(salesAmount * (c.insuranceFeePct || 0) / 100) : 0;
       var sstBase = r2(
@@ -942,6 +1072,12 @@
         lines: P.lines,
         byPharmacy: byPharmacy,
         pharmacyCount: pharmacyCount,
+        /* The terms travel WITH the figures. The fee invoice and the statement
+           read the rate off here rather than deriving it again from the global
+           settings, so a line can no longer describe a rate it did not charge. */
+        serviceFeePct: terms.serviceFeePct,
+        serviceBase: terms.serviceBase,
+        mgmtFeePerStore: terms.mgmtFeePerStore,
         salesAmount: salesAmount,
         discount: r2(salesAmount - netSales),
         netSales: netSales,
@@ -991,6 +1127,179 @@
         gross: gross, discount: r2(gross - net), net: net
       };
     }).sort(function (a, b) { return b.net - a.net; });
+  }
+
+  /* ------------------------------------------------------------- the audit
+   *
+   * Everything that has to be true before a statement leaves the building,
+   * checked by recomputing rather than by reading.
+   *
+   * `stop` findings are documents that contradict themselves or the money they
+   * settle. `look` findings are figures that are probably deliberate and need a
+   * person to say so - the two are separated because one blocks a month and the
+   * other does not.
+   *
+   * `xero` is optional: a map of brand owner code to what the organisation
+   * actually holds, so the same pass can say whether the books agree. Without
+   * it every internal check still runs.
+   */
+  function settlementAudit(settlement, billing, c, xero) {
+    c = cfg(c);
+    var out = [];
+    var S = (settlement && settlement.projects) || [];
+    var rate = num(c.sstPct) / 100;
+
+    var say = function (P, severity, what) {
+      out.push({ code: P ? P.code : '', brand: P ? (P.project && P.project.name) || P.code : '',
+                 severity: severity, what: what });
+    };
+    var stop = function (P, what) { say(P, 'stop', what); };
+    var look = function (P, what) { say(P, 'look', what); };
+
+    S.forEach(function (P) {
+      var rows = P.byPharmacy || [];
+
+      /* ---- the pharmacy table has to be the totals it claims -----------
+         Summed here rather than taken from the row, because the row is what is
+         being checked. Three columns, because a statement that adds up in two
+         of them still misstates the third. */
+      var sumG = sumMoney(rows, function (b) { return b.gross; });
+      var sumD = sumMoney(rows, function (b) { return b.discount; });
+      var sumN = sumMoney(rows, function (b) { return b.net; });
+      if (sumG !== r2(P.salesAmount)) {
+        stop(P, 'the pharmacies add to ' + money(sumG) + ' and the sales amount says ' +
+          money(P.salesAmount));
+      }
+      if (sumN !== r2(P.netSales)) {
+        stop(P, 'the pharmacies net ' + money(sumN) + ' and the net sales says ' +
+          money(P.netSales));
+      }
+      if (sumD !== r2(P.discount)) {
+        stop(P, 'the discounts add to ' + money(sumD) + ' and the discount says ' +
+          money(P.discount));
+      }
+      rows.forEach(function (b) {
+        if (r2(b.gross - b.discount) !== r2(b.net)) {
+          stop(P, esc(b.pharmacy && b.pharmacy.trading) + ': ' + money(b.gross) + ' less ' +
+            money(b.discount) + ' is not ' + money(b.net));
+        }
+      });
+
+      /* ---- the summary down the page ----------------------------------- */
+      if (r2(P.salesAmount - P.discount) !== r2(P.netSales)) {
+        stop(P, 'sales less discount is ' + money(r2(P.salesAmount - P.discount)) +
+          ' and net sales says ' + money(P.netSales));
+      }
+      var fees = r2(num(P.mgmtFee) + num(P.serviceFee) + num(P.insuranceFee) + num(P.sst));
+      if (r2(P.netSales - fees) !== r2(P.totalPayout)) {
+        stop(P, 'net sales less the fees is ' + money(r2(P.netSales - fees)) +
+          ' and the payout says ' + money(P.totalPayout));
+      }
+
+      /* ---- the fees, multiplied out ------------------------------------
+         The terms the row says it charged, applied to the base it names. This is
+         the check that would have caught an invoice reading 1% while charging
+         10%, and the one reading 3.8% while the agreement said 3%. */
+      var t = settledTerms(P, c);
+      if (r2(t.mgmtFeePerStore * num(P.pharmacyCount)) !== r2(P.mgmtFee)) {
+        stop(P, P.pharmacyCount + ' shops at ' + money(t.mgmtFeePerStore) + ' is ' +
+          money(r2(t.mgmtFeePerStore * num(P.pharmacyCount))) + ' and the management fee says ' +
+          money(P.mgmtFee));
+      }
+      if (!t.agrees) {
+        stop(P, 'the service fee ' + money(P.serviceFee) + ' is not ' + r2(t.serviceFeePct) +
+          '% of ' + money(t.serviceBase) + ', so the rate cannot be stated on the document');
+      }
+      var sstBase = r2((c.sstOnMgmtFee ? num(P.mgmtFee) : 0) +
+                       (c.sstOnServiceFee ? num(P.serviceFee) : 0) +
+                       (c.sstOnInsurance ? num(P.insuranceFee) : 0));
+      if (r2(sstBase * rate) !== r2(P.sst)) {
+        stop(P, feeChargeLabel(c) + ' of ' + r2(c.sstPct) + '% on ' + money(sstBase) + ' is ' +
+          money(r2(sstBase * rate)) + ' and the charge says ' + money(P.sst));
+      }
+
+      /* ---- it has to be payable and sendable --------------------------- */
+      var bank = P.project && (P.project.bankAccountNo || P.project.bankAccountName);
+      if (!String(bank || '').trim()) {
+        stop(P, 'no bank account on file, so the payout has nowhere to go');
+      }
+      if (!String((P.project && P.project.email) || '').trim()) {
+        look(P, 'no email address, so the statement has to be sent by hand');
+      }
+
+      /* ---- worth a person's eye ---------------------------------------- */
+      if (num(P.pharmacyCount) < rows.length) {
+        look(P, 'the management fee is charged on ' + P.pharmacyCount + ' shops open and ' +
+          rows.length + ' sold - a shop cannot sell while shut, so either the count is stale ' +
+          'or ' + (rows.length - num(P.pharmacyCount)) + ' closed mid-period');
+      }
+      if (num(P.totalPayout) < 0) {
+        look(P, 'the payout is ' + money(P.totalPayout) + ' - the fees come to more than the ' +
+          'sales, so this brand owner owes money rather than being paid');
+      }
+
+      /* ---- and against the books, when they have been read -------------- */
+      var x = xero && xero[P.code];
+      if (x) {
+        if (x.gross != null && r2(x.gross) !== r2(P.salesAmount)) {
+          stop(P, 'the statement bills ' + money(P.salesAmount) + ' and Xero holds ' +
+            money(x.gross) + ' against this brand owner');
+        }
+        if (x.net != null && r2(x.net) !== r2(P.netSales)) {
+          stop(P, 'the statement nets ' + money(P.netSales) + ' and Xero holds ' + money(x.net));
+        }
+        if (x.billTotal != null && r2(x.billTotal) !== r2(P.netSales)) {
+          stop(P, 'the payout bill in Xero is ' + money(x.billTotal) + ' and the statement ' +
+            'settles ' + money(P.netSales));
+        }
+        if (x.feeTotal != null && r2(x.feeTotal) !== fees) {
+          stop(P, 'the fee invoice in Xero is ' + money(x.feeTotal) + ' and the fees deducted ' +
+            'come to ' + money(fees));
+        }
+        /* A quoted number that belongs to another document is the failure that
+           looks entirely normal on the page - twelve August statements cited
+           other companies' payout bills and read perfectly. A number the record
+           has and the statement does not is the same fault one step earlier, so
+           both are refused rather than only the mismatch. */
+        [['billNumber', 'payoutBillNumber', 'payout bill'],
+         ['feeNumber', 'serviceInvoiceNumber', 'fee invoice']].forEach(function (f) {
+          var recorded = x[f[0]], quoted = P[f[1]];
+          if (!recorded) return;
+          if (!quoted) {
+            stop(P, 'the record has ' + f[2] + ' ' + recorded + ' and the statement quotes none');
+          } else if (recorded !== quoted) {
+            stop(P, 'the statement quotes ' + f[2] + ' ' + quoted + ' and the record has ' + recorded);
+          }
+        });
+      }
+    });
+
+    /* ---- the one control that covers the whole month ------------------- */
+    if (billing) {
+      var k = crossCheck(billing, settlement);
+      if (!k.ok) {
+        out.push({ code: '', brand: 'the month', severity: 'stop',
+          what: 'the pharmacies are invoiced ' + money(k.billed) + ' and the brand owners are ' +
+            'owed ' + money(k.owed) + ' - ' + money(k.diff) + ' belongs to nobody' });
+      }
+    }
+    if (settlement && (settlement.unmapped || []).length) {
+      var lost = sumMoney(settlement.unmapped, function (l) { return l.gross; });
+      if (lost) {
+        out.push({ code: '', brand: 'the month', severity: 'stop',
+          what: settlement.unmapped.length + ' row(s) worth ' + money(lost) +
+            ' are in neither the invoices nor the statements' });
+      }
+    }
+
+    var stops = out.filter(function (f) { return f.severity === 'stop'; });
+    return {
+      ok: !stops.length,
+      findings: out,
+      stops: stops.length,
+      looks: out.length - stops.length,
+      checked: S.length
+    };
   }
 
   /* The one control that must never be switched off: everything invoiced to the
@@ -1666,7 +1975,10 @@
     var d = dates(c), rows = [], seq = seqStart(c, 'startFee') - 1;
     settlement.projects.forEach(function (S) {
       seq++;
-      var no = invNo(c.serviceInvPrefix, c.period, seq);
+      /* A number already on the project came from the record and is on a
+         document in Xero. Keep it; the sequence position is spent either way so
+         a fresh month still numbers 1, 2, 3 with no gaps. */
+      var no = S.serviceInvoiceNumber || invNo(c.serviceInvPrefix, c.period, seq);
       S.serviceInvoiceNumber = no;
       var base = assign({
         '*ContactName': S.project.xeroContact || S.project.name,
@@ -1683,17 +1995,27 @@
          is exempt and the 8% follows as a line of its own below. */
       var taxed = function (on) { return (c.sstIsTax && on) ? c.taxTypeSST : c.taxTypeExempt; };
 
+      /* The rate and the base this brand owner was actually charged. Taken
+         from the settlement row, which is where they were decided, so the line
+         cannot describe a rate other than the one in its own amount. */
+      var t = settledTerms(S, c);
       if (S.mgmtFee) rows.push(assign({}, base, {
         '*Description': 'Pharmacy Management Fee - ' + S.pharmacyCount + ' pharmacy(s) - ' + periodLabel(c.period),
         '*Quantity': S.pharmacyCount,
-        '*UnitAmount': r2(c.mgmtFeePerPharmacy).toFixed(2),
+        '*UnitAmount': t.mgmtFeePerStore.toFixed(2),
         '*AccountCode': c.acctMgmtIncome,
         '*TaxType': taxed(c.sstOnMgmtFee)
       }));
       if (S.serviceFee) rows.push(assign({}, base, {
         'EmailAddress': '',
-        '*Description': 'Consignment Service Fee ' + r2(c.serviceFeePct) + '% on gross sales of ' +
-          periodLabel(c.period) + ' (MYR ' + money(S.salesAmount) + ')',
+        /* The rate only where the amount bears it out. A line that states a
+           percentage its own figures contradict is worse than one that states
+           none: the reader checks the arithmetic, it fails, and the invoice
+           looks wrong in a way that hides which half is. */
+        '*Description': 'Consignment Service Fee ' +
+          (t.statedPct == null ? '' : r2(t.statedPct) + '% ') + 'on gross sales of ' +
+          periodLabel(c.period) +
+          (t.baseKnown ? ' (MYR ' + money(t.serviceBase) + ')' : ''),
         '*Quantity': 1,
         '*UnitAmount': r2(S.serviceFee).toFixed(2),
         '*AccountCode': c.acctServiceIncome,
@@ -1740,7 +2062,8 @@
     var d = dates(c), rows = [], seq = seqStart(c, 'startPayout') - 1;
     settlement.projects.forEach(function (S) {
       seq++;
-      var no = invNo(c.payoutBillPrefix, c.period, seq);
+      /* As above: never replace a number that is already on a document. */
+      var no = S.payoutBillNumber || invNo(c.payoutBillPrefix, c.period, seq);
       S.payoutBillNumber = no;
       S.byPharmacy.forEach(function (B) {
         rows.push(assign({
@@ -2194,6 +2517,9 @@
 
   function statementHTML(P, c) {
     c = cfg(c);
+    /* The terms this brand owner was charged, not the house rate. Resolved once
+       here so the fee rows, the note and the invoice all quote one answer. */
+    var T_ = settledTerms(P, c);
     var sr = function (l, v, cls) {
       return '<tr class="' + (cls || '') + '"><td>' + l + '</td><td class="n">' + v + '</td></tr>';
     };
@@ -2201,8 +2527,7 @@
     var rows = P.byPharmacy.map(function (B, i) {
       return '<tr><td>' + esc(B.pharmacy.trading) + '</td><td class="n">' + money(B.gross) + '</td>' +
         '<td class="n pc">' + pShare[i].toFixed(1) + '%</td>' +
-        '<td class="n">' + money(B.discount) + '</td><td class="n">' + money(B.net) + '</td>' +
-        '<td class="n">' + money(B.mgmtFee) + '</td></tr>';
+        '<td class="n">' + money(B.discount) + '</td><td class="n">' + money(B.net) + '</td></tr>';
     }).join('');
 
     /* What sold, rather than who sold it. */
@@ -2259,11 +2584,19 @@
       '<table class="dt"><thead><tr><th>Pharmacy</th><th class="n">Sales Amount</th>' +
       '<th class="n">Share</th>' +
       '<th class="n">Discount ' + r2(c.discountPct) + '%</th><th class="n">Net Sales</th>' +
-      '<th class="n">Mgmt Fee</th></tr></thead><tbody>' + rows +
-      '<tr class="tt"><td>Total &mdash; ' + P.pharmacyCount + ' pharmacy(s)</td>' +
+      '</tr></thead><tbody>' + rows +
+      /* The count is the number of rows above it, not the number of pharmacies
+         the management fee is charged on - those stopped being the same figure
+         when the fee moved onto the stores in operation. */
+      '<tr class="tt"><td>Total &mdash; ' + P.byPharmacy.length + ' pharmacy(s) with sales</td>' +
       '<td class="n">' + money(P.salesAmount) + '</td><td class="n pc">100.0%</td>' +
       '<td class="n">' + money(P.discount) + '</td>' +
-      '<td class="n">' + money(P.netSales) + '</td><td class="n">' + money(P.mgmtFee) + '</td></tr></tbody></table>' +
+      '<td class="n">' + money(P.netSales) + '</td></tr></tbody></table>' +
+      (P.pharmacyCount !== P.byPharmacy.length
+        ? '<div class="note">The management fee is charged on ' + P.pharmacyCount +
+          ' pharmac' + (P.pharmacyCount === 1 ? 'y' : 'ies') + ' in operation this period, ' +
+          'which is not the same as the ' + P.byPharmacy.length + ' shown above with sales.</div>'
+        : '') +
 
       (prod.length
         ? '<div class="sech">What sold</div>' +
@@ -2280,14 +2613,50 @@
       sr('Sales Amount', money(P.salesAmount)) +
       sr('Less: Discount ' + r2(c.discountPct) + '%', '(' + money(P.discount) + ')') +
       sr('Net Sales', money(P.netSales), 'sub') +
-      sr('Less: Pharmacy Management Fee (' + P.pharmacyCount + ' pharmacy &times; MYR ' + money(c.mgmtFeePerPharmacy) + ')',
-        '(' + money(P.mgmtFee) + ')') +
-      sr('Less: Service Fee ' + r2(c.serviceFeePct) + '% of Sales Amount', '(' + money(P.serviceFee) + ')') +
+      sr('Less: Pharmacy Management Fee (' + P.pharmacyCount + ' pharmacy &times; MYR ' +
+        money(T_.mgmtFeePerStore) + ')', '(' + money(P.mgmtFee) + ')') +
+      /* Worded as the fee invoice words it, from the same resolved terms, and
+         naming the figure the rate was applied to. It used to say "of Sales
+         Amount", which is an instruction to multiply the figure above - and
+         that only gives the right answer when the brand's whole gross for the
+         period and the part settled here happen to be the same number. */
+      sr('Less: Service Fee ' + (T_.statedPct == null ? '' : r2(T_.statedPct) + '% ') +
+        'on gross sales' +
+        (T_.baseKnown && r2(T_.serviceBase) !== r2(P.salesAmount)
+          ? ' of ' + money(T_.serviceBase) : ''),
+        '(' + money(P.serviceFee) + ')') +
       (P.insuranceFee ? sr('Less: Insurance ' + r2(c.insuranceFeePct) + '% of Sales Amount',
         '(' + money(P.insuranceFee) + ')') : '') +
       sr('Less: ' + feeChargeLabel(c) + ' ' + r2(c.sstPct) + '% on fees', '(' + money(P.sst) + ')') +
       sr('TOTAL PAYOUT AMOUNT (MYR)', money(P.totalPayout), 'tot') +
       '</table>' +
+
+      /* Said plainly, on the statements where each applies. A reader who
+         multiplies the Sales Amount by a rate and gets a different number
+         should find the reason on the page, not have to ask for it. Gathered
+         into one block so two of them do not read as a pile of warnings. */
+      (function () {
+        var n = [];
+        if (r2(P.discount) !== r2(P.salesAmount * c.discountPct / 100)) {
+          n.push('The ' + r2(c.discountPct) + '% discount is taken on each product line and rounded ' +
+            'there, exactly as it is on the pharmacy invoices, so this settlement and those invoices ' +
+            'agree to the sen. Added up that way the discount comes to ' + money(P.discount) +
+            ' rather than the ' + money(r2(P.salesAmount * c.discountPct / 100)) +
+            ' that ' + r2(c.discountPct) + '% of the Sales Amount alone would give.');
+        }
+        if (r2(T_.serviceBase) !== r2(P.salesAmount)) {
+          n.push('The service fee is charged on this brand&rsquo;s gross sales for the period' +
+            (T_.baseKnown ? ', ' + money(T_.serviceBase) + ',' : ',') + ' which is ' +
+            (T_.serviceBase > P.salesAmount ? 'more' : 'less') + ' than the ' + money(P.salesAmount) +
+            ' settled above &mdash; sales not billed through this settlement are still part of it.');
+        } else if (r2(P.serviceFee) !== r2(P.salesAmount * T_.serviceFeePct / 100)) {
+          /* Same base, and still not the rate on it. Not something to explain
+             away in a sentence - the figures disagree, and the pre-send check
+             is where that gets caught. Said plainly rather than dressed up. */
+          n.push('The service fee shown is the amount charged on the fee invoice.');
+        }
+        return n.length ? '<div class="note">' + n.join('<br>') + '</div>' : '';
+      })() +
 
       /* "Tax invoice" is a term with a legal meaning and only a registered
          company may issue one. Called that by a company with no registration it
@@ -2295,7 +2664,7 @@
       '<div class="ft">Fees are billed separately on ' + (c.sstIsTax ? 'tax invoice' : 'invoice') +
       ' <b>' + esc(P.serviceInvoiceNumber || '—') +
       '</b> and offset against settlement <b>' + esc(P.payoutBillNumber || '—') + '</b>.<br>' +
-      'Service fee is calculated on the gross Sales Amount before discount. Amounts in Malaysian Ringgit.' +
+      'Service fee is calculated on gross sales before discount. Amounts in Malaysian Ringgit.' +
       '<div class="sig"><div>Prepared by<br><span></span></div>' +
       '<div>Acknowledged by ' + esc(P.project.name) + '<br><span></span></div></div></div></section>';
   }
@@ -2354,8 +2723,13 @@
        and that is true whether the month is being prepared or reprinted. Only
        the numbering is conditional. */
     requireAccounts(c, ['acctPassThrough', 'acctMgmtIncome', 'acctServiceIncome']);
+    /* Only a shortcut now. It used to be the whole safeguard, and it was the
+       wrong question: one brand owner with no fee invoice - which is a real and
+       allowed state - made an entire numbered month look unnumbered, and every
+       recorded number was replaced. The builders below now keep what they are
+       given, so being wrong here costs work rather than correctness. */
     var already = settlement.projects.length && settlement.projects.every(function (P) {
-      return P.serviceInvoiceNumber && P.payoutBillNumber;
+      return P.payoutBillNumber;
     });
     if (already) return;
     xeroServiceInvoices(settlement, c);
@@ -3894,6 +4268,7 @@
     periodPhrase: periodPhrase, docReference: docReference,
     payoutRunDoc: payoutRunDoc, settlementFromRun: settlementFromRun,
     feeChargeLabel: feeChargeLabel,
+    feeTerms: feeTerms, settledTerms: settledTerms, settlementAudit: settlementAudit,
     resolveLines: resolveLines, buildSettlement: buildSettlement, buildPharmacyBilling: buildPharmacyBilling,
     isBillable: isBillable, crossCheck: crossCheck, extractRows: extractRows, noiseReason: noiseReason,
     trackingPairs: trackingPairs, trackingOption: trackingOption, trackingUsed: trackingUsed,
